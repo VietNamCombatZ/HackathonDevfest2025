@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { GoogleMap, useJsApiLoader, Rectangle, Polygon, Polyline, Marker } from '@react-google-maps/api';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { GoogleMap, useJsApiLoader, Polygon, Polyline, Marker } from '@react-google-maps/api';
 import axios from 'axios';
 import * as polyline from '@mapbox/polyline';
 
@@ -7,227 +7,196 @@ import * as polyline from '@mapbox/polyline';
 const CLOUD_RUN_URL = import.meta.env.VITE_CLOUD_RUN_URL || "http://localhost:8989";
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyDrmU7jKJByeSSF0ngpPelT3p4kte09I7Y";
 
+// === FIREBASE REALTIME DATABASE URL ===
+const FIREBASE_DB_URL = "https://hydros-72c7c-default-rtdb.asia-southeast1.firebasedatabase.app";
+
 // Debug
 console.log("🔑 API Key:", GOOGLE_MAPS_API_KEY);
 console.log("🌐 Cloud URL:", CLOUD_RUN_URL);
+console.log("🔥 Firebase DB:", FIREBASE_DB_URL);
 
 // --- TỌA ĐỘ ĐÀ NẴNG ---
-const center = { lat: 16.0544, lng: 108.2022 }; // Trung tâm Đà Nẵng
+const center = { lat: 16.0544, lng: 108.2022 };
 
 // Điểm mặc định
-const DEFAULT_START = { lat: 16.0470, lng: 108.2068 }; // Vị trí mặc định Đà Nẵng
-const DEFAULT_END = { lat: 16.0678, lng: 108.2208 };   // Gần Bãi biển Mỹ Khê
+const DEFAULT_START = { lat: 16.0470, lng: 108.2068 };
+const DEFAULT_END = { lat: 16.0678, lng: 108.2208 };
 
-// === DỮLIỆU VÙNG NGẬP DỌC THEO ĐƯỜNG - ĐẸP VÀ CHÍNH XÁC ===
-const FLOOD_ROADS = [
-  // VÙNG 1: QUANG TRUNG - THEO ĐÚNG ĐỘ CONG CỦA ĐƯỜNG
-  {
-    id: 'quang_trung_curved_flood',
-    name: '🔴 Quang Trung - Ngập nặng',
-    type: 'road_polygon',
-    path: [
-      // Theo đúng đường Quang Trung thực tế với độ cong tự nhiên
-      { lat: 16.0728, lng: 108.2158 }, // Điểm đầu
-      { lat: 16.0731, lng: 108.2161 }, // Cong nhẹ
-      { lat: 16.0734, lng: 108.2164 }, // Tiếp tục cong
-      { lat: 16.0737, lng: 108.2167 }, // Đoạn thẳng
-      { lat: 16.0740, lng: 108.2170 }, // Đoạn thẳng
-      { lat: 16.0743, lng: 108.2173 }, // Trung tâm
-      { lat: 16.0746, lng: 108.2176 }, // Đoạn thẳng
-      { lat: 16.0749, lng: 108.2179 }, // Bắt đầu cong
-      { lat: 16.0752, lng: 108.2182 }, // Cong mạnh hơn
-      { lat: 16.0754, lng: 108.2185 }, // Điểm cuối
-    ],
-    width: 70, // meters - độ rộng đường + lề
-    severity: 'high'
-  },
-  // VÙNG 2: HÙNG VƯƠNG - ĐƯỜNG THẲNG
-  {
-    id: 'hung_vuong_straight_flood',
-    name: '🟠 Hùng Vương - Ngập vừa',
-    type: 'road_polygon',
-    path: [
-      // Đường Hùng Vương tương đối thẳng
-      { lat: 16.067906, lng: 108.218946 },
-      { lat: 16.068106, lng: 108.219146 },
-      { lat: 16.068306, lng: 108.219346 },
-      { lat: 16.068506, lng: 108.219546 },
-      { lat: 16.068706, lng: 108.219746 },
-      { lat: 16.068906, lng: 108.219946 },
-    ],
-    width: 55,
-    severity: 'medium'
-  },
-  // VÙNG 3: TRẦN PHÚ - ĐƯỜNG CONG GẦN BIỂN
-  {
-    id: 'tran_phu_coastal_flood',
-    name: '🟡 Trần Phú - Ngập nhẹ',
-    type: 'road_polygon',
-    path: [
-      // Đường Trần Phú cong theo bờ biển
-      { lat: 16.0580, lng: 108.2220 },
-      { lat: 16.0582, lng: 108.2223 }, // Cong nhẹ
-      { lat: 16.0585, lng: 108.2227 }, // Cong theo bờ
-      { lat: 16.0588, lng: 108.2232 }, // Tiếp tục cong
-      { lat: 16.0590, lng: 108.2237 }, // Cong mạnh hơn
-      { lat: 16.0592, lng: 108.2242 }, // Điểm cuối
-    ],
-    width: 50,
-    severity: 'low'
+// === PHÂN CẤP MỨC NƯỚC THEO THỰC TẾ ===
+// 0-130mm: Bình thường (cho phép đi)
+// 130-180mm: Cảnh báo (cho phép đi nhưng cẩn thận)
+// 180-300mm: Nguy hiểm (CHẶN - không cho đi)
+// >300mm: Cực kỳ nguy hiểm (CHẶN - không cho đi)
+
+type FloodSeverity = 'normal' | 'warning' | 'danger' | 'critical';
+
+interface CameraData {
+  cameraId: string;
+  roadName: string;
+  location: {
+    lat: number;
+    lng: number;
+  };
+  flood: {
+    isFlooded: boolean;
+    waterLevelMm: number;
+  };
+  updatedAt: number;
+}
+
+// === PHÂN LOẠI MỨC ĐỘ NGẬP ===
+function getFloodSeverity(waterLevelMm: number): FloodSeverity {
+  if (waterLevelMm > 300) return 'critical';  // Cực kỳ nguy hiểm
+  if (waterLevelMm > 180) return 'danger';    // Nguy hiểm
+  if (waterLevelMm > 130) return 'warning';   // Cảnh báo
+  return 'normal';                             // Bình thường
+}
+
+// Kiểm tra có cho phép đi qua không
+function isPassable(waterLevelMm: number): boolean {
+  return waterLevelMm <= 180; // Chỉ cho phép đi khi <= 180mm
+}
+
+// Kiểm tra có cần hiển thị trên bản đồ không (chỉ hiển thị từ mức cảnh báo trở lên)
+function shouldDisplayOnMap(waterLevelMm: number): boolean {
+  return waterLevelMm > 130; // Chỉ hiển thị từ 130mm trở lên
+}
+
+// === MÀU SẮC THEO MỨC ĐỘ NGẬP ===
+function getFloodColorByWaterLevel(waterLevelMm: number): string {
+  const severity = getFloodSeverity(waterLevelMm);
+  switch (severity) {
+    case 'critical': return '#8B0000'; // Đỏ đậm - Cực kỳ nguy hiểm (>300mm)
+    case 'danger': return '#FF0000';   // Đỏ - Nguy hiểm (180-300mm)
+    case 'warning': return '#FFA500';  // Cam - Cảnh báo (130-180mm)
+    case 'normal': return '#90EE90';   // Xanh nhạt - Bình thường (0-130mm)
   }
-];
+}
 
-// FIX: Thêm libraries
-const libraries: ("places" | "geometry" | "drawing")[] = ["places", "geometry"];
+function getFloodOpacityByWaterLevel(waterLevelMm: number): number {
+  const severity = getFloodSeverity(waterLevelMm);
+  switch (severity) {
+    case 'critical': return 0.8; // Rất đậm
+    case 'danger': return 0.7;   // Đậm
+    case 'warning': return 0.5;  // Vừa
+    case 'normal': return 0.3;   // Nhẹ
+  }
+}
 
-// Helper function để tạo container style
-const getContainerStyle = (selectingPoint: 'start' | 'end' | null) => ({
-  width: '100%', 
-  height: '100vh',
-  display: 'block' as const,
-  cursor: selectingPoint ? 'crosshair' as const : 'default' as const
-});
+function getSeverityIcon(waterLevelMm: number): string {
+  const severity = getFloodSeverity(waterLevelMm);
+  switch (severity) {
+    case 'critical': return '🚨'; // Cực kỳ nguy hiểm
+    case 'danger': return '🔴';   // Nguy hiểm
+    case 'warning': return '⚠️';  // Cảnh báo
+    case 'normal': return '🟢';   // Bình thường
+  }
+}
 
-// === HÀM TẠO VÙNG NGẬP DỌC THEO ĐƯỜNG - TỐI ƯU ===
-function createRoadFloodPolygon(
-  path: google.maps.LatLngLiteral[], 
-  widthInMeters: number
+function getSeverityText(waterLevelMm: number): string {
+  const severity = getFloodSeverity(waterLevelMm);
+  const passable = isPassable(waterLevelMm);
+  
+  switch (severity) {
+    case 'critical': return `Cực kỳ nguy hiểm (${waterLevelMm}mm) - CHẶN`;
+    case 'danger': return `Nguy hiểm (${waterLevelMm}mm) - CHẶN`;
+    case 'warning': return `Cảnh báo (${waterLevelMm}mm) - Cho phép đi`;
+    case 'normal': return `Bình thường (${waterLevelMm}mm)`;
+  }
+}
+
+// === HÀM TẠO VÙNG NGẬP DỰA TRÊN TỌA ĐỘ ===
+function createFloodZoneFromLocation(
+  location: { lat: number; lng: number },
+  waterLevelMm: number
 ): google.maps.LatLngLiteral[] {
-  if (path.length < 2) {
-    console.warn("⚠️ Path quá ngắn để tạo polygon");
-    return [];
-  }
-
-  const leftSide: google.maps.LatLngLiteral[] = [];
-  const rightSide: google.maps.LatLngLiteral[] = [];
-
-  for (let i = 0; i < path.length; i++) {
-    const currentPoint = path[i];
-    let bearing = 0;
-
-    // Tính góc hướng (bearing) - cải thiện để xử lý độ cong
-    if (i === 0) {
-      // Điểm đầu: dùng hướng đến điểm tiếp theo
-      const nextPoint = path[i + 1];
-      bearing = calculateBearing(currentPoint, nextPoint);
-    } else if (i === path.length - 1) {
-      // Điểm cuối: dùng hướng từ điểm trước
-      const prevPoint = path[i - 1];
-      bearing = calculateBearing(prevPoint, currentPoint);
-    } else {
-      // Điểm giữa: trung bình hóa để làm mượt độ cong
-      const prevPoint = path[i - 1];
-      const nextPoint = path[i + 1];
-      const bearing1 = calculateBearing(prevPoint, currentPoint);
-      const bearing2 = calculateBearing(currentPoint, nextPoint);
-      bearing = averageBearing(bearing1, bearing2);
-    }
-
-    // Tạo điểm bên trái và bên phải của đường
-    const leftPoint = calculateOffset(currentPoint, bearing - 90, widthInMeters / 2);
-    const rightPoint = calculateOffset(currentPoint, bearing + 90, widthInMeters / 2);
-
-    // Kiểm tra tọa độ hợp lệ
-    if (isValidCoordinate(leftPoint) && isValidCoordinate(rightPoint)) {
-      leftSide.push(leftPoint);
-      rightSide.unshift(rightPoint); // unshift để đảo ngược thứ tự
-    }
-  }
-
-  // Kết hợp thành polygon khép kín
-  const polygon = [...leftSide, ...rightSide];
   
-  // Đảm bảo polygon có ít nhất 4 điểm
-  if (polygon.length < 4) {
-    console.warn("⚠️ Polygon không đủ điểm");
-    return [];
-  }
+  console.log(`🗺️ Tạo vùng ngập tại (${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}), mức nước: ${waterLevelMm}mm, mức độ: ${getFloodSeverity(waterLevelMm)}`);
   
-  console.log("✅ Tạo road polygon thành công với", polygon.length, "điểm");
-  return polygon;
+  // Tính độ rộng và độ dài vùng ngập dựa trên mức nước
+  const baseWidth = Math.max(50, Math.min(150, waterLevelMm * 0.8)); // 50-150 meters
+  const floodLength = Math.max(200, Math.min(400, waterLevelMm * 2)); // 200-400 meters
+  
+  const halfWidth = baseWidth / 2;
+  const halfLength = floodLength / 2;
+  
+  // Tạo hình chữ nhật đơn giản quanh vị trí camera
+  const bearing = 45; // Hướng mặc định: Đông Bắc
+  
+  // Tạo 4 góc của hình chữ nhật
+  const corners: google.maps.LatLngLiteral[] = [];
+  
+  // Góc 1: Trên-Trái
+  const topLeft = calculateOffset(
+    calculateOffset(location, bearing, halfLength),
+    bearing - 90,
+    halfWidth
+  );
+  corners.push(topLeft);
+  
+  // Góc 2: Trên-Phải
+  const topRight = calculateOffset(
+    calculateOffset(location, bearing, halfLength),
+    bearing + 90,
+    halfWidth
+  );
+  corners.push(topRight);
+  
+  // Góc 3: Dưới-Phải
+  const bottomRight = calculateOffset(
+    calculateOffset(location, bearing, -halfLength),
+    bearing + 90,
+    halfWidth
+  );
+  corners.push(bottomRight);
+  
+  // Góc 4: Dưới-Trái
+  const bottomLeft = calculateOffset(
+    calculateOffset(location, bearing, -halfLength),
+    bearing - 90,
+    halfWidth
+  );
+  corners.push(bottomLeft);
+  
+  console.log(`✅ Tạo polygon với 4 góc`);
+  return corners;
 }
 
-// Tính trung bình của 2 bearing để làm mượt độ cong
-function averageBearing(bearing1: number, bearing2: number): number {
-  // Xử lý trường hợp bearing qua 0/360 độ
-  let diff = bearing2 - bearing1;
-  if (diff > 180) diff -= 360;
-  if (diff < -180) diff += 360;
-  
-  let avgBearing = bearing1 + diff / 2;
-  if (avgBearing < 0) avgBearing += 360;
-  if (avgBearing >= 360) avgBearing -= 360;
-  
-  return avgBearing;
-}
-
-// Tính góc bearing giữa 2 điểm - cải thiện độ chính xác
-function calculateBearing(point1: google.maps.LatLngLiteral, point2: google.maps.LatLngLiteral): number {
-  const lat1 = point1.lat * Math.PI / 180;
-  const lat2 = point2.lat * Math.PI / 180;
-  const deltaLng = (point2.lng - point1.lng) * Math.PI / 180;
-
-  const x = Math.sin(deltaLng) * Math.cos(lat2);
-  const y = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
-
-  const bearing = Math.atan2(x, y);
-  return (bearing * 180 / Math.PI + 360) % 360;
-}
-
-// Tính điểm offset theo bearing và khoảng cách - cải thiện độ chính xác
+// Tính điểm offset
 function calculateOffset(
-  point: google.maps.LatLngLiteral, 
-  bearing: number, 
-  distanceInMeters: number
+  point: google.maps.LatLngLiteral,
+  bearing: number,
+  distanceMeters: number
 ): google.maps.LatLngLiteral {
+  const R = 6371000; // Earth radius in meters
   const bearingRad = bearing * Math.PI / 180;
-  
-  // Sử dụng công thức chính xác hơn cho Đà Nẵng
-  const earthRadius = 6371000; // meters
   const lat1 = point.lat * Math.PI / 180;
   const lng1 = point.lng * Math.PI / 180;
   
   const lat2 = Math.asin(
-    Math.sin(lat1) * Math.cos(distanceInMeters / earthRadius) +
-    Math.cos(lat1) * Math.sin(distanceInMeters / earthRadius) * Math.cos(bearingRad)
+    Math.sin(lat1) * Math.cos(distanceMeters / R) +
+    Math.cos(lat1) * Math.sin(distanceMeters / R) * Math.cos(bearingRad)
   );
   
   const lng2 = lng1 + Math.atan2(
-    Math.sin(bearingRad) * Math.sin(distanceInMeters / earthRadius) * Math.cos(lat1),
-    Math.cos(distanceInMeters / earthRadius) - Math.sin(lat1) * Math.sin(lat2)
+    Math.sin(bearingRad) * Math.sin(distanceMeters / R) * Math.cos(lat1),
+    Math.cos(distanceMeters / R) - Math.sin(lat1) * Math.sin(lat2)
   );
-
+  
   return {
     lat: lat2 * 180 / Math.PI,
     lng: lng2 * 180 / Math.PI
   };
 }
 
-// Kiểm tra tọa độ hợp lệ
-function isValidCoordinate(point: google.maps.LatLngLiteral): boolean {
-  return !isNaN(point.lat) && !isNaN(point.lng) && 
-         Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180;
-}
+const libraries: ("places" | "geometry" | "drawing")[] = ["places", "geometry"];
 
-// Lấy màu theo mức độ ngập
-function getFloodColor(severity: string) {
-  switch (severity) {
-    case 'high': return '#FF0000'; // Đỏ - ngập nặng
-    case 'medium': return '#FF8C00'; // Cam - ngập vừa  
-    case 'low': return '#FFD700'; // Vàng - ngập nhẹ
-    default: return '#FF0000';
-  }
-}
-
-// Lấy opacity theo mức độ ngập
-function getFloodOpacity(severity: string) {
-  switch (severity) {
-    case 'high': return 0.6;
-    case 'medium': return 0.4;
-    case 'low': return 0.3;
-    default: return 0.5;
-  }
-}
+const getContainerStyle = (selectingPoint: 'start' | 'end' | null) => ({
+  width: '100%',
+  height: '100vh',
+  display: 'block' as const,
+  cursor: selectingPoint ? 'crosshair' as const : 'default' as const
+});
 
 const MapFlood: React.FC = () => {
   const { isLoaded, loadError } = useJsApiLoader({
@@ -236,7 +205,6 @@ const MapFlood: React.FC = () => {
     libraries: libraries
   });
 
-  // Thêm ref để force re-render map
   const mapRef = useRef<google.maps.Map | null>(null);
   
   const [routePath, setRoutePath] = useState<google.maps.LatLngLiteral[]>([]);
@@ -244,198 +212,219 @@ const MapFlood: React.FC = () => {
   const [routeKey, setRouteKey] = useState(0);
   const [showRoute, setShowRoute] = useState(false);
   
-  // State cho điểm đầu và điểm cuối - ĐÃ FIX: Khởi tạo ngay
   const [startPoint, setStartPoint] = useState<google.maps.LatLngLiteral | null>(DEFAULT_START);
   const [endPoint, setEndPoint] = useState<google.maps.LatLngLiteral>(DEFAULT_END);
   
-  // State để theo dõi đang chọn điểm nào
   const [selectingPoint, setSelectingPoint] = useState<'start' | 'end' | null>(null);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
-
-  // Thêm state để force re-render toàn bộ map
   const [mapKey, setMapKey] = useState(0);
 
-  // === STATE CHO VÙNG NGẬP ===
-  const [showFloodZones, setShowFloodZones] = useState(true);
-  const [floodData, setFloodData] = useState(FLOOD_ROADS);
+  // === STATE CHO DỮ LIỆU TỪ FIREBASE ===
+  const [firebaseCameraData, setFirebaseCameraData] = useState<CameraData[]>([]);
+  const [showFirebaseFloodZones, setShowFirebaseFloodZones] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState(Date.now());
+  const [isConnected, setIsConnected] = useState(false);
 
-  // Tự động lấy vị trí khi component mount - ĐÃ FIX
-  React.useEffect(() => {
-    console.log("🗺️ Component mounted, startPoint:", startPoint);
+  // === LẤY DỮ LIỆU TỪ FIREBASE BẰNG FETCH ===
+  const fetchFirebaseData = async () => {
+    try {
+      console.log("🔥 Đang lấy dữ liệu từ Firebase...");
+      const response = await fetch(`${FIREBASE_DB_URL}/cameras.json`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const rawData = await response.json();
+      console.log("📡 Dữ liệu thô từ Firebase:", rawData);
+      
+      if (rawData && typeof rawData === 'object' && rawData !== null) {
+        // Chuyển đổi object thành array
+        const camerasArray: CameraData[] = Object.entries(rawData)
+          .map(([key, value]: [string, any]) => {
+            if (!value || typeof value !== 'object') {
+              console.warn(`⚠️ Camera ${key} có dữ liệu không hợp lệ:`, value);
+              return null;
+            }
+            
+            if (!value.location || 
+                typeof value.location.lat !== 'number' || 
+                typeof value.location.lng !== 'number') {
+              console.warn(`⚠️ Camera ${key} thiếu location:`, value);
+              return null;
+            }
+            
+            if (!value.flood || typeof value.flood.isFlooded !== 'boolean') {
+              console.warn(`⚠️ Camera ${key} thiếu flood data:`, value);
+              return null;
+            }
+            
+            const camera: CameraData = {
+              cameraId: value.cameraId || key,
+              roadName: value.roadName || 'Unknown Road',
+              location: {
+                lat: value.location.lat,
+                lng: value.location.lng
+              },
+              flood: {
+                isFlooded: value.flood.isFlooded,
+                waterLevelMm: value.flood.waterLevelMm || 0
+              },
+              updatedAt: value.updatedAt || Date.now()
+            };
+            
+            console.log(`✅ Camera ${key} parsed:`, camera, `| Mức độ: ${getFloodSeverity(camera.flood.waterLevelMm)} | Cho phép đi: ${isPassable(camera.flood.waterLevelMm)}`);
+            return camera;
+          })
+          .filter((camera): camera is CameraData => camera !== null);
+        
+        // Chỉ lấy camera đang ngập VÀ cần hiển thị (>130mm)
+        const displayableCameras = camerasArray.filter(
+          camera => camera.flood.isFlooded && shouldDisplayOnMap(camera.flood.waterLevelMm)
+        );
+        
+        console.log(`🌊 Tìm thấy ${displayableCameras.length}/${camerasArray.length} camera cần hiển thị (>130mm):`, displayableCameras);
+        setFirebaseCameraData(displayableCameras);
+        setLastUpdate(Date.now());
+        setIsConnected(true);
+      } else {
+        console.warn("⚠️ Dữ liệu Firebase rỗng hoặc không hợp lệ");
+        setFirebaseCameraData([]);
+        setIsConnected(true);
+      }
+    } catch (error) {
+      console.error("❌ Lỗi khi lấy dữ liệu Firebase:", error);
+      setIsConnected(false);
+    }
+  };
+
+  // Lấy dữ liệu lần đầu và cập nhật định kỳ
+  useEffect(() => {
+    console.log("🔥 Khởi tạo kết nối Firebase...");
+    fetchFirebaseData();
     
-    // Thử lấy GPS sau khi component đã render
-    setTimeout(() => {
-      handleGetCurrentLocation();
-    }, 2000); // Đợi 2s để map render xong
+    const interval = setInterval(() => {
+      console.log("🔄 Cập nhật dữ liệu Firebase...");
+      fetchFirebaseData();
+    }, 5000);
+    
+    return () => {
+      console.log("🔌 Dọn dẹp interval");
+      clearInterval(interval);
+    };
   }, []);
 
-  // Debug state changes
-  React.useEffect(() => {
-    console.log("📊 State changed:", {
-      routePathLength: routePath.length,
-      showRoute,
-      routeKey,
-      mapKey,
-      floodZones: floodData.length,
-      startPoint: startPoint ? "✅" : "❌"
+  useEffect(() => {
+    console.log("🗺️ Component mounted");
+    setTimeout(() => {
+      handleGetCurrentLocation();
+    }, 2000);
+  }, []);
+
+  useEffect(() => {
+    console.log("📊 State hiện tại:", {
+      route: routePath.length,
+      floodZones: firebaseCameraData.length,
+      firebase: isConnected ? "✅" : "❌",
+      gps: startPoint ? "✅" : "❌",
+      showFloodZones: showFirebaseFloodZones
     });
-  }, [routePath, showRoute, routeKey, mapKey, floodData, startPoint]);
+  }, [routePath, firebaseCameraData, startPoint, isConnected, showFirebaseFloodZones]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
-    console.log("✅ Map loaded successfully!");
+    console.log("✅ Map loaded!");
     mapRef.current = map;
   }, []);
 
-  const onUnmount = useCallback((_map: google.maps.Map) => {
-    console.log("Map unmounted");
+  const onUnmount = useCallback(() => {
     mapRef.current = null;
   }, []);
 
-  // Hàm clear route - SIÊU MẠNH
   const clearRoute = useCallback(() => {
-    console.log("🔴 FORCE Clearing route...");
-    
-    // Bước 1: Ẩn route ngay lập tức
     setShowRoute(false);
-    
-    // Bước 2: Clear path
     setRoutePath([]);
-    
-    // Bước 3: Tăng tất cả keys để force re-render
     setRouteKey(prev => prev + 1);
     setMapKey(prev => prev + 1);
     
-    // Bước 4: Force refresh map nếu có thể
     if (mapRef.current) {
-      // Trigger một update nhỏ trên map
-      const currentZoom = mapRef.current.getZoom();
-      if (currentZoom) {
-        mapRef.current.setZoom(currentZoom);
-      }
+      const zoom = mapRef.current.getZoom();
+      if (zoom) mapRef.current.setZoom(zoom);
     }
-    
-    console.log("✅ Route FORCE cleared completely");
   }, []);
 
-  // Xử lý click trên bản đồ
   const handleMapClick = useCallback((e: google.maps.MapMouseEvent) => {
     if (!e.latLng) return;
 
-    const clickedPos = {
-      lat: e.latLng.lat(),
-      lng: e.latLng.lng()
-    };
+    const pos = { lat: e.latLng.lat(), lng: e.latLng.lng() };
 
     if (selectingPoint === 'start') {
-      console.log("🎯 Chọn điểm đầu mới, FORCE xóa đường cũ...");
       clearRoute();
-      // Đợi một chút để đảm bảo clear hoàn tất
-      setTimeout(() => {
-        setStartPoint(clickedPos);
-        console.log("✅ Đã chọn điểm đầu:", clickedPos);
-      }, 50);
+      setTimeout(() => setStartPoint(pos), 50);
       setSelectingPoint(null);
     } else if (selectingPoint === 'end') {
-      console.log("🎯 Chọn điểm cuối mới, FORCE xóa đường cũ...");
       clearRoute();
-      // Đợi một chút để đảm bảo clear hoàn tất
-      setTimeout(() => {
-        setEndPoint(clickedPos);
-        console.log("✅ Đã chọn điểm cuối:", clickedPos);
-      }, 50);
+      setTimeout(() => setEndPoint(pos), 50);
       setSelectingPoint(null);
     }
   }, [selectingPoint, clearRoute]);
 
-  // Lấy vị trí hiện tại - ĐÃ FIX
   const handleGetCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      console.warn("⚠️ Trình duyệt không hỗ trợ định vị!");
-      return; // Giữ nguyên vị trí mặc định
-    }
+    if (!navigator.geolocation) return;
 
     setIsGettingLocation(true);
-    
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const currentPos = {
+        setStartPoint({
           lat: position.coords.latitude,
           lng: position.coords.longitude
-        };
-        console.log("📱 Đã lấy vị trí GPS:", currentPos);
-        setStartPoint(currentPos);
+        });
         setIsGettingLocation(false);
       },
-      (error) => {
-        console.error("❌ Lỗi lấy vị trí:", error);
+      () => {
         setIsGettingLocation(false);
-        console.warn("🔄 Giữ vị trí mặc định tại Đà Nẵng");
-        // Không thay đổi startPoint, giữ nguyên vị trí mặc định
       },
-      {
-        enableHighAccuracy: false, // Tắt để nhanh hơn
-        timeout: 3000, // Giảm từ 10s xuống 3s
-        maximumAge: 60000 // Giảm cache time
-      }
+      { enableHighAccuracy: false, timeout: 3000, maximumAge: 60000 }
     );
   };
 
-  // HÀM TÌM ĐƯỜNG - ĐÃ SỬA VỚI FALLBACK
   const handleFindRoute = async () => {
     if (!startPoint) {
-      alert("Vui lòng đợi lấy vị trí hoặc chọn điểm đầu!");
+      alert("Vui lòng chọn điểm đầu!");
       return;
     }
 
-    console.log("🚀 Bắt đầu tìm đường mới...");
-    
-    // BƯỚC 1: FORCE xóa đường cũ hoàn toàn
+    console.log("🚀 Tìm đường với Firebase flood data...");
     clearRoute();
-    
-    // BƯỚC 2: Đợi để đảm bảo UI đã clear hoàn toàn
     await new Promise(resolve => setTimeout(resolve, 200));
-    
-    // BƯỚC 3: Bắt đầu routing
     setIsRouting(true);
 
     try {
-      console.log("🔍 Đang tìm đường từ", startPoint, "đến", endPoint);
-
-      // THỬ PHƯƠNG PHÁP 1: Với custom model (tránh ngập)
       let response;
-      let routingMethod = "custom";
+      let routingMethod = "normal";
       
-      try {
-        // Tạo custom model đơn giản - chỉ dùng 1 vùng ngập chính
-        const mainFlood = floodData.find(f => f.severity === 'high') || floodData[0];
-        
-        if (mainFlood && showFloodZones && mainFlood.type === 'road_polygon') {
-          // Tạo polygon từ path
-          const polygon = createRoadFloodPolygon(mainFlood.path, mainFlood.width);
+      // CHỈ CHẶN CÁC VÙNG NGUY HIỂM VÀ CỰC KỲ NGUY HIỂM (>180mm)
+      const blockedFloods = firebaseCameraData.filter(c => 
+        c.flood.isFlooded && !isPassable(c.flood.waterLevelMm) // >180mm
+      );
+      
+      console.log(`🚫 Tìm thấy ${blockedFloods.length} vùng CHẶN (>180mm):`, blockedFloods);
+      
+      if (blockedFloods.length > 0 && showFirebaseFloodZones) {
+        try {
+          // Lấy vùng ngập nguy hiểm nhất
+          const mostDangerous = blockedFloods.sort((a, b) => 
+            b.flood.waterLevelMm - a.flood.waterLevelMm
+          )[0];
+          
+          const polygon = createFloodZoneFromLocation(
+            mostDangerous.location,
+            mostDangerous.flood.waterLevelMm
+          );
           
           if (polygon.length >= 4) {
-            // Thêm điểm đầu vào cuối để khép kín
             const closedPolygon = [...polygon, polygon[0]];
             
-            const customModel = {
-              priority: [
-                {
-                  if: "in_flood_main",
-                  multiply_by: "0"
-                }
-              ],
-              areas: {
-                flood_main: {
-                  type: "Feature",
-                  geometry: {
-                    type: "Polygon",
-                    coordinates: [closedPolygon.map(p => [p.lng, p.lat])]
-                  }
-                }
-              }
-            };
-
-            console.log("🌊 Thử routing với road polygon (tránh ngập)...");
+            console.log(`🚫 Áp dụng CHẶN cho ${mostDangerous.cameraId} (${mostDangerous.flood.waterLevelMm}mm)`);
             
             response = await axios.post(
               `${CLOUD_RUN_URL}/route?ch.disable=true`,
@@ -445,27 +434,30 @@ const MapFlood: React.FC = () => {
                   [endPoint.lng, endPoint.lat]
                 ],
                 profile: 'car',
-                custom_model: customModel
-              },
-              {
-                timeout: 10000,
-                headers: {
-                  'Content-Type': 'application/json'
+                custom_model: {
+                  priority: [{ if: "in_flood", multiply_by: "0" }],
+                  areas: {
+                    flood: {
+                      type: "Feature",
+                      geometry: {
+                        type: "Polygon",
+                        coordinates: [closedPolygon.map(p => [p.lng, p.lat])]
+                      }
+                    }
+                  }
                 }
-              }
+              },
+              { timeout: 10000, headers: { 'Content-Type': 'application/json' } }
             );
-          } else {
-            throw new Error("Polygon không hợp lệ");
+            routingMethod = "avoid_danger";
           }
-        } else {
-          throw new Error("Không có vùng ngập road_polygon");
+        } catch (err) {
+          console.warn("⚠️ Custom routing failed, fallback to normal");
         }
-        
-      } catch (customError) {
-        console.warn("⚠️ Custom model thất bại, chuyển sang routing thường:", customError);
-        routingMethod = "normal";
-        
-        // PHƯƠNG PHÁP 2: Routing thường (không tránh ngập)
+      }
+      
+      // Fallback to normal routing
+      if (routingMethod === "normal") {
         response = await axios.post(
           `${CLOUD_RUN_URL}/route?ch.disable=true`,
           {
@@ -475,269 +467,224 @@ const MapFlood: React.FC = () => {
             ],
             profile: 'car'
           },
-          {
-            timeout: 10000,
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          }
+          { timeout: 10000 }
         );
       }
 
-      if (response.data.paths && response.data.paths.length > 0) {
-        const encodedString = response.data.paths[0].points;
-        const decodedPoints = polyline.decode(encodedString);
+      if (response && response.data.paths && response.data.paths.length > 0) {
+        const decoded = polyline.decode(response.data.paths[0].points);
+        const path = decoded.map((p: [number, number]) => ({ lat: p[0], lng: p[1] }));
         
-        const pathForGoogle = decodedPoints.map((p: [number, number]) => ({ 
-          lat: p[0], 
-          lng: p[1] 
-        }));
-
-        // BƯỚC 4: Set đường mới với keys mới
-        console.log("🎯 Setting new route with keys:", { routeKey: routeKey + 1, mapKey: mapKey + 1 });
-        setRoutePath(pathForGoogle);
+        setRoutePath(path);
         setRouteKey(prev => prev + 1);
         setMapKey(prev => prev + 1);
+        setTimeout(() => setShowRoute(true), 100);
         
-        // Đợi một chút rồi mới hiển thị
-        setTimeout(() => {
-          setShowRoute(true);
-        }, 100);
-        
-        if (routingMethod === "custom") {
-          console.log("✅ Thành công! Tìm thấy đường tránh ngập dọc theo đường.");
+        if (routingMethod === "avoid_danger") {
+          console.log(`✅ Tìm thấy đường TRÁNH vùng nguy hiểm: ${path.length} điểm`);
+          alert("✅ Đã tìm đường tránh vùng nguy hiểm!");
         } else {
-          console.log("✅ Thành công! Tìm thấy đường đi thường (không tránh ngập).");
-          alert("⚠️ Không thể tránh vùng ngập, hiển thị đường đi thường");
+          console.log(`✅ Tìm thấy đường bình thường: ${path.length} điểm`);
         }
-        console.log(`📍 Số điểm trên đường: ${pathForGoogle.length}`);
       } else {
-        alert("Không tìm thấy đường đi nào!");
+        alert("Không tìm thấy đường!");
       }
-
     } catch (error) {
-      console.error("❌ Lỗi:", error);
-      if (axios.isAxiosError(error)) {
-        console.error("Response:", error.response?.data);
-        console.error("Status:", error.response?.status);
-        
-        // Xử lý các loại lỗi cụ thể
-        if (error.response?.status === 400) {
-          alert(`Lỗi: Tọa độ không hợp lệ hoặc không thể tìm đường giữa 2 điểm này`);
-        } else if (error.response?.status === 500) {
-          alert(`Lỗi server: ${error.response?.data?.message || 'Server đang gặp sự cố'}`);
-        } else if (error.code === 'ECONNABORTED') {
-          alert(`Lỗi: Timeout - Server phản hồi quá chậm`);
-        } else {
-          alert(`Lỗi: ${error.response?.data?.message || error.message || 'Không kết nối được server'}`);
-        }
-      } else {
-        alert(`Lỗi không xác định: ${error}`);
-      }
+      console.error("❌ Lỗi routing:", error);
+      alert("Lỗi tìm đường!");
     } finally {
       setIsRouting(false);
     }
   };
 
-  // === HÀM THÊM VÙNG NGẬP MỚI (Để tích hợp AI sau) ===
-  const addFloodZone = (newFlood: typeof FLOOD_ROADS[0]) => {
-    setFloodData(prev => [...prev, newFlood]);
-    console.log("🌊 Đã thêm vùng ngập mới:", newFlood.name);
-  };
-
-  const removeFloodZone = (floodId: string) => {
-    setFloodData(prev => prev.filter(f => f.id !== floodId));
-    console.log("🗑️ Đã xóa vùng ngập:", floodId);
-  };
-
-  // Error handling - ĐÃ FIX
   if (loadError) {
-    console.error("❌ Google Maps Load Error:", loadError);
-    return (
-      <div style={{
-        textAlign: 'center',
-        marginTop: 50,
-        color: 'red',
-        fontSize: '18px'
-      }}>
-        ❌ Lỗi tải Google Maps: {loadError.message}
-        <br />
-        <small>Kiểm tra API Key hoặc thử refresh (Ctrl+F5)</small>
-      </div>
-    );
+    return <div style={{ textAlign: 'center', marginTop: 50, color: 'red' }}>
+      ❌ Lỗi tải Google Maps: {loadError.message}
+    </div>;
   }
 
   if (!isLoaded) {
-    console.log("⏳ Google Maps đang tải...");
-    return (
-      <div style={{
-        textAlign: 'center',
-        marginTop: 50,
-        fontSize: '18px'
-      }}>
-        ⏳ Đang tải bản đồ...
-      </div>
-    );
+    return <div style={{ textAlign: 'center', marginTop: 50 }}>⏳ Đang tải bản đồ...</div>;
   }
-
-  console.log("🗺️ Rendering map with road flood polygons...");
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
       
       {/* Control Panel */}
       <div style={{
-        position: 'absolute', 
-        top: 20, 
+        position: 'absolute',
+        top: 20,
         left: 20,
         zIndex: 1000,
         background: 'white',
         padding: '15px',
         borderRadius: '10px',
         boxShadow: '0 4px 6px rgba(0,0,0,0.2)',
-        maxWidth: '320px'
+        maxWidth: '380px',
+        maxHeight: '90vh',
+        overflowY: 'auto'
       }}>
-        <h3 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>🗺️ Tránh ngập dọc đường</h3>
+        <h3 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>
+          🔥 Firebase Real-time Flood
+        </h3>
         
-        {/* Toggle vùng ngập */}
-        <div style={{ marginBottom: '10px' }}>
-          <button 
-            onClick={() => setShowFloodZones(!showFloodZones)}
-            style={{ 
-              padding: '8px 12px', 
-              fontSize: '13px',
-              cursor: 'pointer',
-              background: showFloodZones ? '#4CAF50' : '#9E9E9E',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              width: '100%',
-              marginBottom: '5px'
-            }}
-          >
-            {showFloodZones ? '🌊 Ẩn vùng ngập' : '🌊 Hiện vùng ngập'} ({floodData.length})
-          </button>
+        {/* Trạng thái Firebase */}
+        <div style={{
+          marginBottom: '10px',
+          padding: '6px',
+          background: isConnected ? '#E8F5E9' : '#FFEBEE',
+          borderRadius: '5px',
+          fontSize: '11px',
+          color: isConnected ? '#2E7D32' : '#C62828',
+          textAlign: 'center'
+        }}>
+          {isConnected ? '✅ Firebase Connected' : '❌ Disconnected'}
         </div>
 
-        {/* Chọn điểm đầu */}
-        <div style={{ marginBottom: '10px' }}>
-          <button 
-            onClick={() => {
-              console.log("🎯 Bắt đầu chọn điểm đầu...");
-              setSelectingPoint('start');
-            }}
-            style={{ 
-              padding: '8px 12px', 
-              fontSize: '14px',
-              cursor: 'pointer',
-              background: selectingPoint === 'start' ? '#4CAF50' : '#2196F3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              width: '100%',
-              marginBottom: '5px'
-            }}
-          >
-            {selectingPoint === 'start' ? '📍 Click trên bản đồ...' : '📍 Chọn điểm ĐẦU'}
-          </button>
-          <button 
-            onClick={handleGetCurrentLocation}
-            disabled={isGettingLocation}
-            style={{ 
-              padding: '6px 10px', 
-              fontSize: '12px',
-              cursor: isGettingLocation ? 'wait' : 'pointer',
-              background: isGettingLocation ? '#9E9E9E' : '#FF9800',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              width: '100%'
-            }}
-          >
-            {isGettingLocation ? "⏳ Đang lấy..." : "📱 Cập nhật vị trí GPS"}
-          </button>
+        {/* Chú thích mức độ ngập */}
+        <div style={{
+          marginBottom: '10px',
+          padding: '8px',
+          background: '#F5F5F5',
+          borderRadius: '5px',
+          fontSize: '10px'
+        }}>
+          <strong>📊 Phân cấp mức ngập:</strong>
+          <div style={{ marginTop: '5px' }}>
+            <div>🟢 0-130mm: Bình thường</div>
+            <div>⚠️ 130-180mm: Cảnh báo (Cho phép đi)</div>
+            <div>🔴 180-300mm: Nguy hiểm (CHẶN)</div>
+            <div>🚨 &gt;300mm: Cực kỳ nguy hiểm (CHẶN)</div>
+          </div>
         </div>
 
-        {/* Chọn điểm cuối */}
-        <div style={{ marginBottom: '10px' }}>
-          <button 
-            onClick={() => {
-              console.log("🎯 Bắt đầu chọn điểm cuối...");
-              setSelectingPoint('end');
-            }}
-            style={{ 
-              padding: '8px 12px', 
-              fontSize: '14px',
-              cursor: 'pointer',
-              background: selectingPoint === 'end' ? '#4CAF50' : '#2196F3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              width: '100%'
-            }}
-          >
-            {selectingPoint === 'end' ? '📍 Click trên bản đồ...' : '🏁 Chọn điểm CUỐI'}
-          </button>
-        </div>
+        {/* Toggle flood zones */}
+        <button 
+          onClick={() => setShowFirebaseFloodZones(!showFirebaseFloodZones)}
+          style={{ 
+            padding: '8px 12px',
+            fontSize: '13px',
+            cursor: 'pointer',
+            background: showFirebaseFloodZones ? '#4CAF50' : '#9E9E9E',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            width: '100%',
+            marginBottom: '10px'
+          }}
+        >
+          {showFirebaseFloodZones ? '🌊 Ẩn' : '🌊 Hiện'} Vùng Ngập ({firebaseCameraData.length})
+        </button>
 
-        {/* Nút xóa đường - LUÔN HIỆN KHI CÓ ROUTE */}
+        <button 
+          onClick={() => fetchFirebaseData()}
+          style={{ 
+            padding: '6px 10px',
+            fontSize: '12px',
+            cursor: 'pointer',
+            background: '#2196F3',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            width: '100%',
+            marginBottom: '10px'
+          }}
+        >
+          🔄 Làm mới dữ liệu
+        </button>
+
+        <button 
+          onClick={() => setSelectingPoint('start')}
+          style={{ 
+            padding: '8px 12px',
+            fontSize: '14px',
+            background: selectingPoint === 'start' ? '#4CAF50' : '#2196F3',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            width: '100%',
+            marginBottom: '5px',
+            cursor: 'pointer'
+          }}
+        >
+          {selectingPoint === 'start' ? '📍 Click bản đồ...' : '📍 Chọn điểm ĐẦU'}
+        </button>
+
+        <button 
+          onClick={handleGetCurrentLocation}
+          disabled={isGettingLocation}
+          style={{ 
+            padding: '6px 10px',
+            fontSize: '12px',
+            background: isGettingLocation ? '#9E9E9E' : '#FF9800',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            width: '100%',
+            marginBottom: '10px',
+            cursor: isGettingLocation ? 'wait' : 'pointer'
+          }}
+        >
+          {isGettingLocation ? "⏳ Đang lấy..." : "📱 GPS"}
+        </button>
+
+        <button 
+          onClick={() => setSelectingPoint('end')}
+          style={{ 
+            padding: '8px 12px',
+            fontSize: '14px',
+            background: selectingPoint === 'end' ? '#4CAF50' : '#2196F3',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            width: '100%',
+            marginBottom: '10px',
+            cursor: 'pointer'
+          }}
+        >
+          {selectingPoint === 'end' ? '📍 Click bản đồ...' : '🏁 Chọn điểm CUỐI'}
+        </button>
+
         {(routePath.length > 0 || showRoute) && (
           <button 
-            onClick={() => {
-              console.log("🗑️ Manual FORCE clear route clicked");
-              clearRoute();
-            }}
+            onClick={clearRoute}
             style={{ 
-              padding: '8px 12px', 
+              padding: '8px 12px',
               fontSize: '13px',
-              cursor: 'pointer',
               background: '#FF5722',
               color: 'white',
               border: 'none',
               borderRadius: '5px',
               width: '100%',
-              marginBottom: '10px'
+              marginBottom: '10px',
+              cursor: 'pointer'
             }}
           >
             🗑️ XÓA ĐƯỜNG
           </button>
         )}
 
-        {/* Nút tìm đường */}
         <button 
           onClick={handleFindRoute}
           disabled={isRouting || !startPoint}
           style={{ 
-            padding: '12px', 
-            fontSize: '14px', 
+            padding: '12px',
+            fontSize: '14px',
             fontWeight: 'bold',
-            cursor: (isRouting || !startPoint) ? 'wait' : 'pointer', 
-            background: (isRouting || !startPoint) ? '#9E9E9E' : '#d32f2f', 
+            background: (isRouting || !startPoint) ? '#9E9E9E' : '#d32f2f',
             color: 'white',
             border: 'none',
             borderRadius: '5px',
-            width: '100%'
+            width: '100%',
+            marginBottom: '10px',
+            cursor: (isRouting || !startPoint) ? 'wait' : 'pointer'
           }}
         >
-          {isRouting ? "Đang tính toán..." : "🚨 TRÁNH NGẬP DỌC ĐƯỜNG"}
+          {isRouting ? "Đang tính..." : "🔥 TRÁNH NGẬP"}
         </button>
 
-        {/* Hướng dẫn */}
-        {selectingPoint && (
-          <div style={{
-            marginTop: '10px',
-            padding: '8px',
-            background: '#FFF3CD',
-            borderRadius: '5px',
-            fontSize: '12px',
-            color: '#856404'
-          }}>
-            💡 Click vào bản đồ để chọn điểm {selectingPoint === 'start' ? 'đầu' : 'cuối'}
-          </div>
-        )}
-
-        {/* Danh sách vùng ngập */}
-        {showFloodZones && (
+        {/* Danh sách camera */}
+        {showFirebaseFloodZones && firebaseCameraData.length > 0 && (
           <div style={{
             marginTop: '10px',
             padding: '8px',
@@ -745,39 +692,46 @@ const MapFlood: React.FC = () => {
             borderRadius: '5px',
             fontSize: '11px'
           }}>
-            <strong>🌊 Vùng ngập dọc đường:</strong>
-            {floodData.map((flood, index) => (
-              <div key={flood.id} style={{ 
-                marginTop: '5px', 
-                padding: '4px',
-                background: getFloodColor(flood.severity),
+            <strong>📷 Camera Flood Data:</strong>
+            {firebaseCameraData.map((camera) => (
+              <div key={camera.cameraId} style={{ 
+                marginTop: '5px',
+                padding: '6px',
+                background: getFloodColorByWaterLevel(camera.flood.waterLevelMm),
                 color: 'white',
-                borderRadius: '3px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
+                borderRadius: '3px'
               }}>
-                <span style={{ fontSize: '10px' }}>{flood.name}</span>
-                <button 
-                  onClick={() => removeFloodZone(flood.id)}
-                  style={{
-                    background: 'rgba(255,255,255,0.3)',
-                    border: 'none',
-                    color: 'white',
-                    padding: '2px 6px',
-                    borderRadius: '2px',
-                    cursor: 'pointer',
-                    fontSize: '10px'
-                  }}
-                >
-                  ✕
-                </button>
+                <div style={{ fontSize: '10px', fontWeight: 'bold' }}>
+                  {getSeverityIcon(camera.flood.waterLevelMm)} {camera.roadName}
+                </div>
+                <div style={{ fontSize: '9px' }}>
+                  {getSeverityText(camera.flood.waterLevelMm)}
+                </div>
+                <div style={{ fontSize: '8px', opacity: 0.9 }}>
+                  📍 {camera.location.lat.toFixed(4)}, {camera.location.lng.toFixed(4)}
+                </div>
+                <div style={{ fontSize: '8px', opacity: 0.9 }}>
+                  📷 {camera.cameraId}
+                </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Debug info */}
+        {showFirebaseFloodZones && firebaseCameraData.length === 0 && isConnected && (
+          <div style={{
+            marginTop: '10px',
+            padding: '8px',
+            background: '#E3F2FD',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: '#1565C0',
+            textAlign: 'center'
+          }}>
+            ℹ️ Không có vùng ngập cần cảnh báo
+          </div>
+        )}
+
         <div style={{
           marginTop: '10px',
           padding: '5px',
@@ -786,7 +740,18 @@ const MapFlood: React.FC = () => {
           fontSize: '10px',
           color: '#666'
         }}>
-          Debug: Route={routePath.length} RoadPolygons={floodData.length} GPS={startPoint ? "✅" : "❌"}
+          🔍 Route={routePath.length} | Floods={firebaseCameraData.length} | Show={showFirebaseFloodZones ? "✅" : "❌"}
+        </div>
+        
+        <div style={{
+          marginTop: '5px',
+          padding: '5px',
+          background: '#f0f0f0',
+          borderRadius: '3px',
+          fontSize: '9px',
+          color: '#666'
+        }}>
+          ⏰ Cập nhật: {new Date(lastUpdate).toLocaleTimeString()}
         </div>
       </div>
 
@@ -806,116 +771,84 @@ const MapFlood: React.FC = () => {
           fullscreenControl: true
         }}
       >
-        {/* === VÙNG NGẬP DỌC THEO ĐƯỜNG ĐẸP === */}
-        {showFloodZones && floodData.map((flood, index) => {
-          if (flood.type === 'road_polygon') {
-            // Render polygon dọc theo đường
-            const polygonPath = createRoadFloodPolygon(flood.path, flood.width);
-            
-            return (
-              <React.Fragment key={`road-flood-${flood.id}-${index}`}>
-                {/* Polygon vùng ngập dọc theo đường */}
-                <Polygon
-                  path={polygonPath}
-                  options={{
-                    strokeColor: getFloodColor(flood.severity),
-                    strokeOpacity: 0.8,
-                    strokeWeight: 2,
-                    fillColor: getFloodColor(flood.severity),
-                    fillOpacity: getFloodOpacity(flood.severity)
-                  }}
-                />
-                
-                {/* Polyline trung tâm đường để thấy rõ hướng */}
-                <Polyline
-                  path={flood.path}
-                  options={{
-                    strokeColor: getFloodColor(flood.severity),
-                    strokeOpacity: 1,
-                    strokeWeight: 3
-                  }}
-                />
-                
-                {/* Marker đầu và cuối đường */}
-                <Marker 
-                  position={flood.path[0]} 
-                  label={{
-                    text: "🌊",
-                    fontSize: "14px"
-                  }}
-                  title={`${flood.name} - Điểm đầu`}
-                />
-                <Marker 
-                  position={flood.path[flood.path.length - 1]} 
-                  label={{
-                    text: "🏁",
-                    fontSize: "14px"
-                  }}
-                  title={`${flood.name} - Điểm cuối`}
-                />
-              </React.Fragment>
-            );
-          } else {
-            // Render rectangle cho các vùng khác (nếu có)
-            return (
-              <Rectangle
-                key={`flood-rect-${flood.id}-${index}`}
-                bounds={flood.bounds}
+        {/* === VÙNG NGẬP TỪ FIREBASE (CHỈ HIỂN THỊ >130MM) === */}
+        {showFirebaseFloodZones && firebaseCameraData.map((camera, index) => {
+          console.log(`🎨 Rendering flood zone ${index + 1}/${firebaseCameraData.length}:`, camera.cameraId, `(${camera.flood.waterLevelMm}mm)`);
+          
+          const floodPolygon = createFloodZoneFromLocation(
+            camera.location,
+            camera.flood.waterLevelMm
+          );
+          
+          if (floodPolygon.length < 4) {
+            console.warn(`⚠️ Polygon không hợp lệ cho ${camera.cameraId}`);
+            return null;
+          }
+          
+          return (
+            <React.Fragment key={`flood-${camera.cameraId}-${index}`}>
+              {/* Polygon vùng ngập */}
+              <Polygon
+                path={floodPolygon}
                 options={{
-                  strokeColor: getFloodColor(flood.severity),
-                  strokeOpacity: 0.8,
-                  strokeWeight: 2,
-                  fillColor: getFloodColor(flood.severity),
-                  fillOpacity: getFloodOpacity(flood.severity)
+                  strokeColor: getFloodColorByWaterLevel(camera.flood.waterLevelMm),
+                  strokeOpacity: 0.9,
+                  strokeWeight: isPassable(camera.flood.waterLevelMm) ? 2 : 4, // Đường dày hơn nếu CHẶN
+                  fillColor: getFloodColorByWaterLevel(camera.flood.waterLevelMm),
+                  fillOpacity: getFloodOpacityByWaterLevel(camera.flood.waterLevelMm)
                 }}
               />
-            );
-          }
+              
+              {/* Marker camera */}
+              <Marker 
+                position={camera.location}
+                label={{
+                  text: getSeverityIcon(camera.flood.waterLevelMm),
+                  fontSize: "20px"
+                }}
+                title={`${camera.roadName}\n${getSeverityText(camera.flood.waterLevelMm)}\n📷 ${camera.cameraId}`}
+              />
+            </React.Fragment>
+          );
         })}
 
         {/* Đường đi */}
         {showRoute && routePath.length > 0 && (
           <Polyline
-            key={`route-${routeKey}-${mapKey}`}
+            key={`route-${routeKey}`}
             path={routePath}
             options={{ 
-              strokeColor: '#2196F3', 
-              strokeOpacity: 1, 
-              strokeWeight: 6 
+              strokeColor: '#2196F3',
+              strokeOpacity: 1,
+              strokeWeight: 6
             }}
           />
         )}
         
-        {/* Marker điểm đầu và cuối */}
+        {/* Markers */}
         {startPoint && (
           <Marker 
-            position={startPoint} 
-            label="A" 
-            title="Vị trí của bạn"
-            draggable={true}
+            position={startPoint}
+            label="A"
+            title="Điểm đầu"
+            draggable
             onDragEnd={(e) => {
               if (e.latLng) {
-                console.log("🔄 Kéo marker A, FORCE xóa đường cũ...");
                 clearRoute();
-                setTimeout(() => {
-                  setStartPoint({ lat: e.latLng!.lat(), lng: e.latLng!.lng() });
-                }, 50);
+                setTimeout(() => setStartPoint({ lat: e.latLng!.lat(), lng: e.latLng!.lng() }), 50);
               }
             }}
           />
         )}
         <Marker 
-          position={endPoint} 
-          label="B" 
+          position={endPoint}
+          label="B"
           title="Điểm cuối"
-          draggable={true}
+          draggable
           onDragEnd={(e) => {
             if (e.latLng) {
-              console.log("🔄 Kéo marker B, FORCE xóa đường cũ...");
               clearRoute();
-              setTimeout(() => {
-                setEndPoint({ lat: e.latLng!.lat(), lng: e.latLng!.lng() });
-              }, 50);
+              setTimeout(() => setEndPoint({ lat: e.latLng!.lat(), lng: e.latLng!.lng() }), 50);
             }
           }}
         />
