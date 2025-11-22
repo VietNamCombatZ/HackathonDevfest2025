@@ -96,122 +96,123 @@ function getSeverityText(waterLevelMm: number): string {
 }
 
 // === SNAP CAMERA LÊN ĐƯỜNG GẦN NHẤT (ROADS API) ===
-async function snapToNearestRoad(
-  location: { lat: number; lng: number }
-): Promise<{ lat: number; lng: number }> {
-  try {
-    console.log(`📍 Đang snap camera (${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}) lên đường...`);
-    
-    const response = await fetch(
-      `https://roads.googleapis.com/v1/snapToRoads?path=${location.lat},${location.lng}&interpolate=false&key=${GOOGLE_MAPS_API_KEY}`
-    );
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.snappedPoints && data.snappedPoints.length > 0) {
-        const snapped = data.snappedPoints[0].location;
-        const snappedLocation = { lat: snapped.latitude, lng: snapped.longitude };
-        
-        const distance = calculateDistance(location, snappedLocation);
-        console.log(`✅ Snapped thành công! Khoảng cách: ${distance.toFixed(2)}m`);
-        console.log(`   Gốc: (${location.lat.toFixed(6)}, ${location.lng.toFixed(6)})`);
-        console.log(`   Snap: (${snappedLocation.lat.toFixed(6)}, ${snappedLocation.lng.toFixed(6)})`);
-        
-        return snappedLocation;
-      }
-    }
-
-    console.warn('⚠️ Roads API không trả về kết quả, dùng tọa độ gốc');
-    return location;
-  } catch (error) {
-    console.error('❌ Lỗi Roads API:', error);
-    return location;
+function findNearestPointOnPath(
+  location: { lat: number; lng: number },
+  path: google.maps.LatLngLiteral[]
+): { point: google.maps.LatLngLiteral; distance: number } {
+  if (path.length === 0) {
+    return { point: location, distance: 0 };
   }
+  
+  let nearestPoint = path[0];
+  let minDistance = calculateDistance(location, path[0]);
+  
+  for (const point of path) {
+    const distance = calculateDistance(location, point);
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearestPoint = point;
+    }
+  }
+  
+  console.log(`📍 Tìm điểm gần nhất trên đường: ${minDistance.toFixed(2)}m`);
+  return { point: nearestPoint, distance: minDistance };
 }
 
 // === SỬ DỤNG GOOGLE MAPS DIRECTIONS SERVICE (KHÔNG BỊ CORS) ===
 async function getRoadPathFromLocation(
   location: { lat: number; lng: number },
-  lengthMeters: number = 300
+  lengthMeters: number = 300 
 ): Promise<google.maps.LatLngLiteral[]> {
   try {
-    console.log(`🛣️ Lấy road path cho (${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}) - DirectionsService`);
-    
     if (typeof google === 'undefined' || !google.maps || !google.maps.DirectionsService) {
-      console.error('❌ Google Maps chưa load!');
       return [location];
     }
     
     const directionsService = new google.maps.DirectionsService();
     
-    let bestPath: google.maps.LatLngLiteral[] = [];
-    let maxPoints = 0;
-    const halfLength = lengthMeters / 2;
+    // Chỉ dò 1 đoạn ngắn (80m) để xác định hướng đường chính xác
+    // Nếu dò dài quá, Google sẽ tự chỉ đường rẽ lung tung ở ngã tư
+    const probeDistance = 80; 
     
-    const bearings = [0, 45, 90, 135];
+    // Thử các góc để tìm hướng xuôi chiều giao thông
+    // Nguyễn Văn Linh là đường đôi, nên chỉ có 1 chiều đúng, chiều ngược lại sẽ phải đi vòng
+    const bearings = [0, 45, 90, 135, 180, 225, 270, 315];
     
+    let bestHeading = 0;
+    let minLinearity = Infinity;
+    let bestPathFound: google.maps.LatLngLiteral[] = [];
+
+    // Bước 1: Tìm hướng "Thuận chiều" nhất
     for (const bearing of bearings) {
       try {
-        const startPoint = calculateOffset(location, bearing, -halfLength);
-        const endPoint = calculateOffset(location, bearing, halfLength);
+        // Xuất phát TỪ camera, đi RA hướng bearing (chỉ đi 1 chiều)
+        const destPoint = calculateOffset(location, bearing, probeDistance);
         
         const request: google.maps.DirectionsRequest = {
-          origin: new google.maps.LatLng(startPoint.lat, startPoint.lng),
-          destination: new google.maps.LatLng(endPoint.lat, endPoint.lng),
+          origin: new google.maps.LatLng(location.lat, location.lng),
+          destination: new google.maps.LatLng(destPoint.lat, destPoint.lng),
           travelMode: google.maps.TravelMode.DRIVING
         };
         
-        const result = await new Promise<google.maps.DirectionsResult>((resolve, reject) => {
-          directionsService.route(request, (result, status) => {
-            if (status === google.maps.DirectionsStatus.OK && result) {
-              resolve(result);
-            } else {
-              reject(new Error(`Directions failed: ${status}`));
-            }
+        const result = await new Promise<google.maps.DirectionsResult>((resolve) => {
+          directionsService.route(request, (res, status) => {
+            if (status === google.maps.DirectionsStatus.OK && res) resolve(res);
+            else resolve({ routes: [] } as any);
           });
         });
         
         if (result.routes && result.routes.length > 0) {
           const route = result.routes[0];
-          const path: google.maps.LatLngLiteral[] = [];
+          const pathPoints = route.overview_path.map(p => ({ lat: p.lat(), lng: p.lng() }));
           
-          route.overview_path.forEach(point => {
-            path.push({ lat: point.lat(), lng: point.lng() });
-          });
+          // Tính độ thẳng: Đường đi thực tế / Đường chim bay
+          const legDistance = route.legs[0]?.distance?.value || probeDistance * 10; // Lấy mét
+          const directDistance = calculateDistance(location, pathPoints[pathPoints.length - 1]);
           
-          console.log(`✅ DirectionsService (bearing ${bearing}°): ${path.length} điểm`);
-          
-          if (path.length > maxPoints) {
-            maxPoints = path.length;
-            bestPath = path;
+          // Nếu legDistance quá lớn so với probeDistance (ví dụ 500m cho đoạn 80m) => Phải quay đầu => Sai hướng
+          const linearity = legDistance / directDistance;
+
+          // console.log(`Angle ${bearing}: Linearity ${linearity.toFixed(2)} (Dist: ${legDistance}m)`);
+
+          // Tìm hướng có linearity gần 1 nhất (thẳng nhất)
+          if (linearity < 1.2 && Math.abs(linearity - 1) < Math.abs(minLinearity - 1)) {
+            minLinearity = linearity;
+            bestHeading = bearing;
+            bestPathFound = pathPoints;
           }
         }
-      } catch (err) {
-        console.warn(`⚠️ Directions bearing ${bearing}° failed:`, err);
-      }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Bước 2: Chốt hướng và tạo đường thẳng nhân tạo (để tránh bị méo ở ngã tư)
+    // Nếu tìm được hướng tốt (minLinearity ổn)
+    if (bestPathFound.length > 0 && minLinearity < 1.5) {
       
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Tính lại góc chính xác dựa trên 2 điểm đầu của path tìm được (chính xác hơn góc bearing thử nghiệm)
+      const exactBearing = calculateBearing(bestPathFound[0], bestPathFound[1]);
+      
+      console.log(`✅ Chốt hướng đường: ${exactBearing.toFixed(0)} độ`);
+
+      // Tạo một đường thẳng dài dọc theo hướng này (Back -> Forward)
+      // Điểm đầu: Lùi lại 1/2 chiều dài
+      const start = calculateOffset(location, exactBearing, -lengthMeters / 2);
+      // Điểm giữa: Camera
+      // Điểm cuối: Tiến lên 1/2 chiều dài
+      const end = calculateOffset(location, exactBearing, lengthMeters / 2);
+
+      // Trả về đường thẳng tắp (3 điểm) -> Đảm bảo Polygon luôn thẳng đẹp
+      return [start, location, end];
     }
     
-    if (bestPath.length > 0) {
-      const filteredPath = bestPath.filter(point => {
-        const distance = calculateDistance(location, point);
-        return distance <= lengthMeters;
-      });
-      
-      console.log(`✅ Đã lấy ${filteredPath.length} điểm đường thực tế`);
-      return filteredPath.length > 0 ? filteredPath : [location];
-    }
-    
-    console.warn('⚠️ Không lấy được đường từ API, dùng fallback');
+    // Fallback: Nếu không tìm được đường (hiếm), trả về điểm gốc
     return [location];
     
   } catch (error) {
-    console.error('❌ Lỗi DirectionsService:', error);
+    console.error('❌ Lỗi tìm đường:', error);
     return [location];
   }
 }
-
 // Tính khoảng cách giữa 2 điểm (Haversine)
 function calculateDistance(p1: google.maps.LatLngLiteral, p2: google.maps.LatLngLiteral): number {
   const R = 6371000;
@@ -412,47 +413,58 @@ const MapFlood: React.FC = () => {
 
   // === LẤY ROAD PATHS CHO TẤT CẢ CAMERAS (VỚI ROADS API) ===
   const fetchRoadPathsForCameras = async (cameras: CameraData[]) => {
-    const newRoadPaths = new Map(roadPathsCache);
-    const newPolygons = new Map(floodPolygonsCache);
+  const newRoadPaths = new Map(roadPathsCache);
+  const newPolygons = new Map(floodPolygonsCache);
+  
+  for (const camera of cameras) {
+    const cacheKey = `${camera.cameraId}-${camera.flood.waterLevelMm}`;
     
-    for (const camera of cameras) {
-      const cacheKey = `${camera.cameraId}-${camera.flood.waterLevelMm}`;
-      
-      if (newPolygons.has(cacheKey)) {
-        console.log(`📦 Sử dụng cache cho ${camera.cameraId}`);
-        continue;
-      }
-      
-      console.log(`🛣️ Xử lý ${camera.cameraId} (${camera.roadName})...`);
-      
-      // ⭐ BƯỚC 1: SNAP CAMERA LÊN ĐƯỜNG CHÍNH
-      const snappedLocation = await snapToNearestRoad(camera.location);
-      
-      // Lưu vị trí đã snap vào camera data
-      camera.snappedLocation = snappedLocation;
-      
-      // ⭐ BƯỚC 2: LẤY ROAD PATH TỪ VỊ TRÍ ĐÃ SNAP
-      const floodLength = 300; // 300m xung quanh vị trí đã snap
-      const roadPath = await getRoadPathFromLocation(snappedLocation, floodLength);
-      
-      if (roadPath.length > 1) {
-        const roadWidth = Math.max(40, Math.min(100, camera.flood.waterLevelMm * 0.5));
-        const polygon = createPolygonFromRoadPath(roadPath, roadWidth);
-        
-        if (polygon.length >= 4) {
-          newRoadPaths.set(cacheKey, roadPath);
-          newPolygons.set(cacheKey, polygon);
-          console.log(`✅ Đã tạo polygon cho ${camera.cameraId}: ${polygon.length} điểm (từ vị trí snap)`);
-        }
-      }
-      
-      // Delay để tránh rate limit (Roads API + Directions API)
-      await new Promise(resolve => setTimeout(resolve, 500));
+    if (newPolygons.has(cacheKey)) {
+      console.log(`📦 Sử dụng cache cho ${camera.cameraId}`);
+      continue;
     }
     
-    setRoadPathsCache(newRoadPaths);
-    setFloodPolygonsCache(newPolygons);
-  };
+    console.log(`🛣️ Xử lý ${camera.cameraId} (${camera.roadName})...`);
+    
+    // ⭐ BƯỚC 1: LẤY ROAD PATH TỪ VỊ TRÍ CAMERA GỐC
+    const floodLength = 500; // Tăng lên 500m để có nhiều điểm hơn
+    const roadPath = await getRoadPathFromLocation(camera.location, floodLength);
+    
+    if (roadPath.length > 1) {
+      // ⭐ BƯỚC 2: TÌM ĐIỂM GẦN NHẤT TRÊN ROAD PATH
+      const { point: snappedLocation, distance: snapDistance } = findNearestPointOnPath(camera.location, roadPath);
+      
+      console.log(`✅ Snap camera ${camera.cameraId}:`);
+      console.log(`   Gốc: (${camera.location.lat.toFixed(6)}, ${camera.location.lng.toFixed(6)})`);
+      console.log(`   Snap: (${snappedLocation.lat.toFixed(6)}, ${snappedLocation.lng.toFixed(6)})`);
+      console.log(`   Khoảng cách: ${snapDistance.toFixed(2)}m`);
+      
+      // Lưu vị trí đã snap
+      camera.snappedLocation = snappedLocation;
+      
+      // ⭐ BƯỚC 3: TẠO ROAD PATH MỚI XUNG QUANH ĐIỂM ĐÃ SNAP
+      // Lấy 300m xung quanh điểm snap để vẽ polygon chính xác
+      const finalRoadPath = await getRoadPathFromLocation(snappedLocation, 450);
+      
+      if (finalRoadPath.length > 1) {
+        const roadWidth = Math.max(40, Math.min(100, camera.flood.waterLevelMm * 0.5));
+        const polygon = createPolygonFromRoadPath(finalRoadPath, roadWidth);
+        
+        if (polygon.length >= 4) {
+          newRoadPaths.set(cacheKey, finalRoadPath);
+          newPolygons.set(cacheKey, polygon);
+          console.log(`✅ Đã tạo polygon cho ${camera.cameraId}: ${polygon.length} điểm (snap: ${snapDistance.toFixed(0)}m)`);
+        }
+      }
+    }
+    
+    // Delay để tránh rate limit
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  
+  setRoadPathsCache(newRoadPaths);
+  setFloodPolygonsCache(newPolygons);
+};
 
   useEffect(() => {
     console.log("🔥 Khởi tạo kết nối Firebase...");
@@ -689,7 +701,8 @@ const MapFlood: React.FC = () => {
           padding: '8px',
           background: '#F5F5F5',
           borderRadius: '5px',
-          fontSize: '10px'
+          fontSize: '10px',
+          color: 'black'
         }}>
           <strong>📊 Phân cấp mức ngập:</strong>
           <div style={{ marginTop: '5px' }}>

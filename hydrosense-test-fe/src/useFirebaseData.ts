@@ -16,7 +16,7 @@ export function useFirebaseData<T = any>(path: string) {
     
     const unsubscribe = onValue(
       dataRef,
-      (snapshot) => {
+      (snapshot: any) => {
         try {
           const value = snapshot.val();
           setData(value);
@@ -26,7 +26,7 @@ export function useFirebaseData<T = any>(path: string) {
           setLoading(false);
         }
       },
-      (err) => {
+      (err: any) => {
         setError(err as Error);
         setLoading(false);
       }
