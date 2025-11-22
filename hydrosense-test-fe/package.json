@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "seed:firebase": "node seed/seed-firebase.js",
+    "backup:firebase": "node seed/backup-firebase.js",
     "seed:auto-update": "node seed/auto-update-seed.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
@@ -21,6 +22,7 @@
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.3",
     "firebase": "^12.6.0",
+    "fs": "^0.0.1-security",
     "lodash": "^4.17.21",
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
