@@ -1,3 +1,3 @@
-*.pbf
 vietnam.pbf
-graph-cache
+graphhopper.jar
+graph-cache/
