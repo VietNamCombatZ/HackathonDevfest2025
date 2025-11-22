@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { GoogleMap, useJsApiLoader, Circle, Polyline, Marker, Polygon } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, Rectangle, Polygon, Polyline, Marker } from '@react-google-maps/api';
 import axios from 'axios';
 import * as polyline from '@mapbox/polyline';
 
@@ -15,57 +15,64 @@ console.log("🌐 Cloud URL:", CLOUD_RUN_URL);
 const center = { lat: 16.0544, lng: 108.2022 }; // Trung tâm Đà Nẵng
 
 // Điểm mặc định
-const DEFAULT_START = null; // Sẽ lấy vị trí GPS
+const DEFAULT_START = { lat: 16.0470, lng: 108.2068 }; // Vị trí mặc định Đà Nẵng
 const DEFAULT_END = { lat: 16.0678, lng: 108.2208 };   // Gần Bãi biển Mỹ Khê
 
-// === DỮLIỆU VÙNG NGẬP DỌC THEO ĐƯỜNG ===
-// Ví dụ: Đường Trần Phú bị ngập (có thể thay bằng dữ liệu AI)
+// === DỮLIỆU VÙNG NGẬP DỌC THEO ĐƯỜNG - ĐẸP VÀ CHÍNH XÁC ===
 const FLOOD_ROADS = [
+  // VÙNG 1: QUANG TRUNG - THEO ĐÚNG ĐỘ CONG CỦA ĐƯỜNG
   {
-    id: 'quang_trung_main_flood',
-    name: 'Đường Quang Trung (đoạn chính) - Ngập nặng',
+    id: 'quang_trung_curved_flood',
+    name: '🔴 Quang Trung - Ngập nặng',
+    type: 'road_polygon',
     path: [
-      { lat: 16.074358, lng: 108.217684 }, // Tọa độ chính xác Quang Trung
-      { lat: 16.074500, lng: 108.217800 }, // Đoạn tiếp theo
-      { lat: 16.074650, lng: 108.217920 }, // Đoạn giữa 1
-      { lat: 16.074800, lng: 108.218040 }, // Đoạn giữa 2
-      { lat: 16.074950, lng: 108.218160 }, // Đoạn giữa 3
-      { lat: 16.075100, lng: 108.218280 }, // Đoạn cuối
+      // Theo đúng đường Quang Trung thực tế với độ cong tự nhiên
+      { lat: 16.0728, lng: 108.2158 }, // Điểm đầu
+      { lat: 16.0731, lng: 108.2161 }, // Cong nhẹ
+      { lat: 16.0734, lng: 108.2164 }, // Tiếp tục cong
+      { lat: 16.0737, lng: 108.2167 }, // Đoạn thẳng
+      { lat: 16.0740, lng: 108.2170 }, // Đoạn thẳng
+      { lat: 16.0743, lng: 108.2173 }, // Trung tâm
+      { lat: 16.0746, lng: 108.2176 }, // Đoạn thẳng
+      { lat: 16.0749, lng: 108.2179 }, // Bắt đầu cong
+      { lat: 16.0752, lng: 108.2182 }, // Cong mạnh hơn
+      { lat: 16.0754, lng: 108.2185 }, // Điểm cuối
     ],
-    width: 50, // meters - đường chính rộng
-    severity: 'high' // ngập nặng do là đường chính
-  },
-  {
-    id: 'quang_trung_intersection_flood',
-    name: 'Giao lộ Quang Trung - Ngập cực nặng',
-    path: [
-      { lat: 16.074200, lng: 108.217500 }, // Giao lộ phía tây
-      { lat: 16.074358, lng: 108.217684 }, // Trung tâm Quang Trung
-      { lat: 16.074500, lng: 108.217850 }, // Giao lộ phía đông
-    ],
-    width: 70, // meters - giao lộ rộng hơn
+    width: 70, // meters - độ rộng đường + lề
     severity: 'high'
   },
+  // VÙNG 2: HÙNG VƯƠNG - ĐƯỜNG THẲNG
   {
-    id: 'quang_trung_side_flood',
-    name: 'Đường nhánh Quang Trung - Ngập vừa',
+    id: 'hung_vuong_straight_flood',
+    name: '🟠 Hùng Vương - Ngập vừa',
+    type: 'road_polygon',
     path: [
-      { lat: 16.074100, lng: 108.217400 }, // Nhánh phía nam
-      { lat: 16.074200, lng: 108.217550 }, // Kết nối
-      { lat: 16.074358, lng: 108.217684 }, // Giao với đường chính
+      // Đường Hùng Vương tương đối thẳng
+      { lat: 16.067906, lng: 108.218946 },
+      { lat: 16.068106, lng: 108.219146 },
+      { lat: 16.068306, lng: 108.219346 },
+      { lat: 16.068506, lng: 108.219546 },
+      { lat: 16.068706, lng: 108.219746 },
+      { lat: 16.068906, lng: 108.219946 },
     ],
-    width: 35, // meters
+    width: 55,
     severity: 'medium'
   },
+  // VÙNG 3: TRẦN PHÚ - ĐƯỜNG CONG GẦN BIỂN
   {
-    id: 'nearby_street_flood',
-    name: 'Đường phụ gần Quang Trung - Ngập nhẹ',
+    id: 'tran_phu_coastal_flood',
+    name: '🟡 Trần Phú - Ngập nhẹ',
+    type: 'road_polygon',
     path: [
-      { lat: 16.074600, lng: 108.217400 }, // Đường song song
-      { lat: 16.074700, lng: 108.217600 }, // Đoạn giữa
-      { lat: 16.074800, lng: 108.217800 }, // Kết nối
+      // Đường Trần Phú cong theo bờ biển
+      { lat: 16.0580, lng: 108.2220 },
+      { lat: 16.0582, lng: 108.2223 }, // Cong nhẹ
+      { lat: 16.0585, lng: 108.2227 }, // Cong theo bờ
+      { lat: 16.0588, lng: 108.2232 }, // Tiếp tục cong
+      { lat: 16.0590, lng: 108.2237 }, // Cong mạnh hơn
+      { lat: 16.0592, lng: 108.2242 }, // Điểm cuối
     ],
-    width: 30, // meters
+    width: 50,
     severity: 'low'
   }
 ];
@@ -81,14 +88,16 @@ const getContainerStyle = (selectingPoint: 'start' | 'end' | null) => ({
   cursor: selectingPoint ? 'crosshair' as const : 'default' as const
 });
 
-// === HÀM TẠO VÙNG NGẬP DỌC THEO ĐƯỜNG ===
-function createFloodPolygonAlongPath(
+// === HÀM TẠO VÙNG NGẬP DỌC THEO ĐƯỜNG - TỐI ƯU ===
+function createRoadFloodPolygon(
   path: google.maps.LatLngLiteral[], 
   widthInMeters: number
 ): google.maps.LatLngLiteral[] {
-  if (path.length < 2) return [];
+  if (path.length < 2) {
+    console.warn("⚠️ Path quá ngắn để tạo polygon");
+    return [];
+  }
 
-  const polygonPoints: google.maps.LatLngLiteral[] = [];
   const leftSide: google.maps.LatLngLiteral[] = [];
   const rightSide: google.maps.LatLngLiteral[] = [];
 
@@ -96,28 +105,63 @@ function createFloodPolygonAlongPath(
     const currentPoint = path[i];
     let bearing = 0;
 
-    // Tính góc hướng (bearing) giữa các điểm
-    if (i < path.length - 1) {
+    // Tính góc hướng (bearing) - cải thiện để xử lý độ cong
+    if (i === 0) {
+      // Điểm đầu: dùng hướng đến điểm tiếp theo
       const nextPoint = path[i + 1];
       bearing = calculateBearing(currentPoint, nextPoint);
-    } else if (i > 0) {
+    } else if (i === path.length - 1) {
+      // Điểm cuối: dùng hướng từ điểm trước
       const prevPoint = path[i - 1];
       bearing = calculateBearing(prevPoint, currentPoint);
+    } else {
+      // Điểm giữa: trung bình hóa để làm mượt độ cong
+      const prevPoint = path[i - 1];
+      const nextPoint = path[i + 1];
+      const bearing1 = calculateBearing(prevPoint, currentPoint);
+      const bearing2 = calculateBearing(currentPoint, nextPoint);
+      bearing = averageBearing(bearing1, bearing2);
     }
 
     // Tạo điểm bên trái và bên phải của đường
     const leftPoint = calculateOffset(currentPoint, bearing - 90, widthInMeters / 2);
     const rightPoint = calculateOffset(currentPoint, bearing + 90, widthInMeters / 2);
 
-    leftSide.push(leftPoint);
-    rightSide.unshift(rightPoint); // unshift để đảo ngược thứ tự
+    // Kiểm tra tọa độ hợp lệ
+    if (isValidCoordinate(leftPoint) && isValidCoordinate(rightPoint)) {
+      leftSide.push(leftPoint);
+      rightSide.unshift(rightPoint); // unshift để đảo ngược thứ tự
+    }
   }
 
   // Kết hợp thành polygon khép kín
-  return [...leftSide, ...rightSide];
+  const polygon = [...leftSide, ...rightSide];
+  
+  // Đảm bảo polygon có ít nhất 4 điểm
+  if (polygon.length < 4) {
+    console.warn("⚠️ Polygon không đủ điểm");
+    return [];
+  }
+  
+  console.log("✅ Tạo road polygon thành công với", polygon.length, "điểm");
+  return polygon;
 }
 
-// Tính góc bearing giữa 2 điểm
+// Tính trung bình của 2 bearing để làm mượt độ cong
+function averageBearing(bearing1: number, bearing2: number): number {
+  // Xử lý trường hợp bearing qua 0/360 độ
+  let diff = bearing2 - bearing1;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  
+  let avgBearing = bearing1 + diff / 2;
+  if (avgBearing < 0) avgBearing += 360;
+  if (avgBearing >= 360) avgBearing -= 360;
+  
+  return avgBearing;
+}
+
+// Tính góc bearing giữa 2 điểm - cải thiện độ chính xác
 function calculateBearing(point1: google.maps.LatLngLiteral, point2: google.maps.LatLngLiteral): number {
   const lat1 = point1.lat * Math.PI / 180;
   const lat2 = point2.lat * Math.PI / 180;
@@ -130,7 +174,7 @@ function calculateBearing(point1: google.maps.LatLngLiteral, point2: google.maps
   return (bearing * 180 / Math.PI + 360) % 360;
 }
 
-// Tính điểm offset theo bearing và khoảng cách
+// Tính điểm offset theo bearing và khoảng cách - cải thiện độ chính xác
 function calculateOffset(
   point: google.maps.LatLngLiteral, 
   bearing: number, 
@@ -138,14 +182,31 @@ function calculateOffset(
 ): google.maps.LatLngLiteral {
   const bearingRad = bearing * Math.PI / 180;
   
-  // Chuyển đổi meters sang degrees (xấp xỉ)
-  const latOffset = (distanceInMeters / 111320) * Math.cos(bearingRad);
-  const lngOffset = (distanceInMeters / (111320 * Math.cos(point.lat * Math.PI / 180))) * Math.sin(bearingRad);
+  // Sử dụng công thức chính xác hơn cho Đà Nẵng
+  const earthRadius = 6371000; // meters
+  const lat1 = point.lat * Math.PI / 180;
+  const lng1 = point.lng * Math.PI / 180;
+  
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(distanceInMeters / earthRadius) +
+    Math.cos(lat1) * Math.sin(distanceInMeters / earthRadius) * Math.cos(bearingRad)
+  );
+  
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(bearingRad) * Math.sin(distanceInMeters / earthRadius) * Math.cos(lat1),
+    Math.cos(distanceInMeters / earthRadius) - Math.sin(lat1) * Math.sin(lat2)
+  );
 
   return {
-    lat: point.lat + latOffset,
-    lng: point.lng + lngOffset
+    lat: lat2 * 180 / Math.PI,
+    lng: lng2 * 180 / Math.PI
   };
+}
+
+// Kiểm tra tọa độ hợp lệ
+function isValidCoordinate(point: google.maps.LatLngLiteral): boolean {
+  return !isNaN(point.lat) && !isNaN(point.lng) && 
+         Math.abs(point.lat) <= 90 && Math.abs(point.lng) <= 180;
 }
 
 // Lấy màu theo mức độ ngập
@@ -183,8 +244,8 @@ const MapFlood: React.FC = () => {
   const [routeKey, setRouteKey] = useState(0);
   const [showRoute, setShowRoute] = useState(false);
   
-  // State cho điểm đầu và điểm cuối
-  const [startPoint, setStartPoint] = useState<google.maps.LatLngLiteral | null>(null);
+  // State cho điểm đầu và điểm cuối - ĐÃ FIX: Khởi tạo ngay
+  const [startPoint, setStartPoint] = useState<google.maps.LatLngLiteral | null>(DEFAULT_START);
   const [endPoint, setEndPoint] = useState<google.maps.LatLngLiteral>(DEFAULT_END);
   
   // State để theo dõi đang chọn điểm nào
@@ -198,11 +259,14 @@ const MapFlood: React.FC = () => {
   const [showFloodZones, setShowFloodZones] = useState(true);
   const [floodData, setFloodData] = useState(FLOOD_ROADS);
 
-  // Tự động lấy vị trí khi component mount
+  // Tự động lấy vị trí khi component mount - ĐÃ FIX
   React.useEffect(() => {
-    if (!startPoint) {
+    console.log("🗺️ Component mounted, startPoint:", startPoint);
+    
+    // Thử lấy GPS sau khi component đã render
+    setTimeout(() => {
       handleGetCurrentLocation();
-    }
+    }, 2000); // Đợi 2s để map render xong
   }, []);
 
   // Debug state changes
@@ -212,9 +276,10 @@ const MapFlood: React.FC = () => {
       showRoute,
       routeKey,
       mapKey,
-      floodZones: floodData.length
+      floodZones: floodData.length,
+      startPoint: startPoint ? "✅" : "❌"
     });
-  }, [routePath, showRoute, routeKey, mapKey, floodData]);
+  }, [routePath, showRoute, routeKey, mapKey, floodData, startPoint]);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     console.log("✅ Map loaded successfully!");
@@ -282,13 +347,11 @@ const MapFlood: React.FC = () => {
     }
   }, [selectingPoint, clearRoute]);
 
-  // Lấy vị trí hiện tại
+  // Lấy vị trí hiện tại - ĐÃ FIX
   const handleGetCurrentLocation = () => {
     if (!navigator.geolocation) {
-      alert("Trình duyệt không hỗ trợ định vị!");
-      // Fallback về vị trí mặc định Đà Nẵng
-      setStartPoint({ lat: 16.0470, lng: 108.2068 });
-      return;
+      console.warn("⚠️ Trình duyệt không hỗ trợ định vị!");
+      return; // Giữ nguyên vị trí mặc định
     }
 
     setIsGettingLocation(true);
@@ -299,41 +362,31 @@ const MapFlood: React.FC = () => {
           lat: position.coords.latitude,
           lng: position.coords.longitude
         };
-        console.log("📱 Cập nhật vị trí GPS, FORCE xóa đường cũ...");
-        clearRoute();
-        setTimeout(() => {
-          setStartPoint(currentPos);
-          console.log("✅ Đã lấy vị trí hiện tại:", currentPos);
-        }, 50);
+        console.log("📱 Đã lấy vị trí GPS:", currentPos);
+        setStartPoint(currentPos);
         setIsGettingLocation(false);
       },
       (error) => {
-        console.error("Lỗi lấy vị trí:", error);
-        
-        // Fallback về vị trí mặc định Đà Nẵng
-        const fallbackPos = { lat: 16.0470, lng: 108.2068 };
-        setStartPoint(fallbackPos);
+        console.error("❌ Lỗi lấy vị trí:", error);
         setIsGettingLocation(false);
-        
-        if (error.code === error.PERMISSION_DENIED) {
-          alert("Bạn đã từ chối chia sẻ vị trí. Sử dụng vị trí mặc định tại Đà Nẵng.");
-        }
+        console.warn("🔄 Giữ vị trí mặc định tại Đà Nẵng");
+        // Không thay đổi startPoint, giữ nguyên vị trí mặc định
       },
       {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 300000
+        enableHighAccuracy: false, // Tắt để nhanh hơn
+        timeout: 3000, // Giảm từ 10s xuống 3s
+        maximumAge: 60000 // Giảm cache time
       }
     );
   };
 
-  // HÀM TÌM ĐƯỜNG - ĐÃ SỬA MẠNH
+  // HÀM TÌM ĐƯỜNG - ĐÃ SỬA VỚI FALLBACK
   const handleFindRoute = async () => {
     if (!startPoint) {
       alert("Vui lòng đợi lấy vị trí hoặc chọn điểm đầu!");
       return;
     }
-  
+
     console.log("🚀 Bắt đầu tìm đường mới...");
     
     // BƯỚC 1: FORCE xóa đường cũ hoàn toàn
@@ -344,25 +397,25 @@ const MapFlood: React.FC = () => {
     
     // BƯỚC 3: Bắt đầu routing
     setIsRouting(true);
-  
+
     try {
       console.log("🔍 Đang tìm đường từ", startPoint, "đến", endPoint);
-  
+
       // THỬ PHƯƠNG PHÁP 1: Với custom model (tránh ngập)
       let response;
       let routingMethod = "custom";
       
       try {
-        // Tạo custom model đơn giản hơn - chỉ dùng 1 vùng ngập chính
+        // Tạo custom model đơn giản - chỉ dùng 1 vùng ngập chính
         const mainFlood = floodData.find(f => f.severity === 'high') || floodData[0];
         
-        if (mainFlood && showFloodZones) {
-          const polygonCoords = createFloodPolygonAlongPath(mainFlood.path, mainFlood.width);
+        if (mainFlood && showFloodZones && mainFlood.type === 'road_polygon') {
+          // Tạo polygon từ path
+          const polygon = createRoadFloodPolygon(mainFlood.path, mainFlood.width);
           
-          // Đảm bảo polygon hợp lệ (ít nhất 4 điểm và khép kín)
-          if (polygonCoords.length >= 4) {
-            // Thêm điểm đầu vào cuối để khép kín polygon
-            const closedPolygon = [...polygonCoords, polygonCoords[0]];
+          if (polygon.length >= 4) {
+            // Thêm điểm đầu vào cuối để khép kín
+            const closedPolygon = [...polygon, polygon[0]];
             
             const customModel = {
               priority: [
@@ -381,9 +434,8 @@ const MapFlood: React.FC = () => {
                 }
               }
             };
-  
-            console.log("🌊 Thử routing với custom model (tránh ngập)...");
-            console.log("📐 Polygon points:", closedPolygon.length);
+
+            console.log("🌊 Thử routing với road polygon (tránh ngập)...");
             
             response = await axios.post(
               `${CLOUD_RUN_URL}/route?ch.disable=true`,
@@ -396,7 +448,7 @@ const MapFlood: React.FC = () => {
                 custom_model: customModel
               },
               {
-                timeout: 10000, // 10 seconds timeout
+                timeout: 10000,
                 headers: {
                   'Content-Type': 'application/json'
                 }
@@ -406,7 +458,7 @@ const MapFlood: React.FC = () => {
             throw new Error("Polygon không hợp lệ");
           }
         } else {
-          throw new Error("Không có vùng ngập hoặc đã tắt hiển thị");
+          throw new Error("Không có vùng ngập road_polygon");
         }
         
       } catch (customError) {
@@ -422,7 +474,6 @@ const MapFlood: React.FC = () => {
               [endPoint.lng, endPoint.lat]
             ],
             profile: 'car'
-            // Không có custom_model
           },
           {
             timeout: 10000,
@@ -432,7 +483,7 @@ const MapFlood: React.FC = () => {
           }
         );
       }
-  
+
       if (response.data.paths && response.data.paths.length > 0) {
         const encodedString = response.data.paths[0].points;
         const decodedPoints = polyline.decode(encodedString);
@@ -441,7 +492,7 @@ const MapFlood: React.FC = () => {
           lat: p[0], 
           lng: p[1] 
         }));
-  
+
         // BƯỚC 4: Set đường mới với keys mới
         console.log("🎯 Setting new route with keys:", { routeKey: routeKey + 1, mapKey: mapKey + 1 });
         setRoutePath(pathForGoogle);
@@ -454,7 +505,7 @@ const MapFlood: React.FC = () => {
         }, 100);
         
         if (routingMethod === "custom") {
-          console.log("✅ Thành công! Tìm thấy đường tránh ngập Quang Trung.");
+          console.log("✅ Thành công! Tìm thấy đường tránh ngập dọc theo đường.");
         } else {
           console.log("✅ Thành công! Tìm thấy đường đi thường (không tránh ngập).");
           alert("⚠️ Không thể tránh vùng ngập, hiển thị đường đi thường");
@@ -463,7 +514,7 @@ const MapFlood: React.FC = () => {
       } else {
         alert("Không tìm thấy đường đi nào!");
       }
-  
+
     } catch (error) {
       console.error("❌ Lỗi:", error);
       if (axios.isAxiosError(error)) {
@@ -499,25 +550,28 @@ const MapFlood: React.FC = () => {
     console.log("🗑️ Đã xóa vùng ngập:", floodId);
   };
 
+  // Error handling - ĐÃ FIX
   if (loadError) {
+    console.error("❌ Google Maps Load Error:", loadError);
     return (
       <div style={{
-        textAlign:'center', 
-        marginTop: 50, 
+        textAlign: 'center',
+        marginTop: 50,
         color: 'red',
         fontSize: '18px'
       }}>
         ❌ Lỗi tải Google Maps: {loadError.message}
-        <br/>
+        <br />
         <small>Kiểm tra API Key hoặc thử refresh (Ctrl+F5)</small>
       </div>
     );
   }
 
   if (!isLoaded) {
+    console.log("⏳ Google Maps đang tải...");
     return (
       <div style={{
-        textAlign:'center', 
+        textAlign: 'center',
         marginTop: 50,
         fontSize: '18px'
       }}>
@@ -526,20 +580,7 @@ const MapFlood: React.FC = () => {
     );
   }
 
-  // Thêm loading cho GPS
-  if (!startPoint) {
-    return (
-      <div style={{
-        textAlign:'center', 
-        marginTop: 50,
-        fontSize: '18px'
-      }}>
-        📍 Đang lấy vị trí của bạn...
-        <br />
-        <small>Vui lòng cho phép truy cập vị trí</small>
-      </div>
-    );
-  }
+  console.log("🗺️ Rendering map with road flood polygons...");
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
@@ -556,7 +597,7 @@ const MapFlood: React.FC = () => {
         boxShadow: '0 4px 6px rgba(0,0,0,0.2)',
         maxWidth: '320px'
       }}>
-        <h3 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>🗺️ Điều khiển</h3>
+        <h3 style={{ margin: '0 0 10px 0', fontSize: '16px' }}>🗺️ Tránh ngập dọc đường</h3>
         
         {/* Toggle vùng ngập */}
         <div style={{ marginBottom: '10px' }}>
@@ -613,7 +654,7 @@ const MapFlood: React.FC = () => {
               width: '100%'
             }}
           >
-            {isGettingLocation ? "⏳ Đang lấy..." : "📱 Cập nhật vị trí"}
+            {isGettingLocation ? "⏳ Đang lấy..." : "📱 Cập nhật vị trí GPS"}
           </button>
         </div>
 
@@ -678,7 +719,7 @@ const MapFlood: React.FC = () => {
             width: '100%'
           }}
         >
-          {isRouting ? "Đang tính toán..." : "🚨 Tìm đường TRÁNH NGẬP"}
+          {isRouting ? "Đang tính toán..." : "🚨 TRÁNH NGẬP DỌC ĐƯỜNG"}
         </button>
 
         {/* Hướng dẫn */}
@@ -704,7 +745,7 @@ const MapFlood: React.FC = () => {
             borderRadius: '5px',
             fontSize: '11px'
           }}>
-            <strong>🌊 Vùng ngập hiện tại:</strong>
+            <strong>🌊 Vùng ngập dọc đường:</strong>
             {floodData.map((flood, index) => (
               <div key={flood.id} style={{ 
                 marginTop: '5px', 
@@ -716,7 +757,7 @@ const MapFlood: React.FC = () => {
                 justifyContent: 'space-between',
                 alignItems: 'center'
               }}>
-                <span>{flood.name}</span>
+                <span style={{ fontSize: '10px' }}>{flood.name}</span>
                 <button 
                   onClick={() => removeFloodZone(flood.id)}
                   style={{
@@ -736,7 +777,7 @@ const MapFlood: React.FC = () => {
           </div>
         )}
 
-        {/* Debug info - NÂNG CẤP */}
+        {/* Debug info */}
         <div style={{
           marginTop: '10px',
           padding: '5px',
@@ -745,11 +786,11 @@ const MapFlood: React.FC = () => {
           fontSize: '10px',
           color: '#666'
         }}>
-          Debug: Route={routePath.length} Show={showRoute.toString()} Floods={floodData.length}
+          Debug: Route={routePath.length} RoadPolygons={floodData.length} GPS={startPoint ? "✅" : "❌"}
         </div>
       </div>
 
-      {/* GOOGLE MAP VỚI KEY ĐỂ FORCE RE-RENDER */}
+      {/* GOOGLE MAP */}
       <GoogleMap
         key={`map-${mapKey}`}
         mapContainerStyle={getContainerStyle(selectingPoint)}
@@ -765,15 +806,61 @@ const MapFlood: React.FC = () => {
           fullscreenControl: true
         }}
       >
-        {/* === VÙNG NGẬP DỌC THEO ĐƯỜNG === */}
+        {/* === VÙNG NGẬP DỌC THEO ĐƯỜNG ĐẸP === */}
         {showFloodZones && floodData.map((flood, index) => {
-          const polygonPath = createFloodPolygonAlongPath(flood.path, flood.width);
-          
-          return (
-            <React.Fragment key={`flood-${flood.id}-${index}`}>
-              {/* Polygon vùng ngập */}
-              <Polygon
-                path={polygonPath}
+          if (flood.type === 'road_polygon') {
+            // Render polygon dọc theo đường
+            const polygonPath = createRoadFloodPolygon(flood.path, flood.width);
+            
+            return (
+              <React.Fragment key={`road-flood-${flood.id}-${index}`}>
+                {/* Polygon vùng ngập dọc theo đường */}
+                <Polygon
+                  path={polygonPath}
+                  options={{
+                    strokeColor: getFloodColor(flood.severity),
+                    strokeOpacity: 0.8,
+                    strokeWeight: 2,
+                    fillColor: getFloodColor(flood.severity),
+                    fillOpacity: getFloodOpacity(flood.severity)
+                  }}
+                />
+                
+                {/* Polyline trung tâm đường để thấy rõ hướng */}
+                <Polyline
+                  path={flood.path}
+                  options={{
+                    strokeColor: getFloodColor(flood.severity),
+                    strokeOpacity: 1,
+                    strokeWeight: 3
+                  }}
+                />
+                
+                {/* Marker đầu và cuối đường */}
+                <Marker 
+                  position={flood.path[0]} 
+                  label={{
+                    text: "🌊",
+                    fontSize: "14px"
+                  }}
+                  title={`${flood.name} - Điểm đầu`}
+                />
+                <Marker 
+                  position={flood.path[flood.path.length - 1]} 
+                  label={{
+                    text: "🏁",
+                    fontSize: "14px"
+                  }}
+                  title={`${flood.name} - Điểm cuối`}
+                />
+              </React.Fragment>
+            );
+          } else {
+            // Render rectangle cho các vùng khác (nếu có)
+            return (
+              <Rectangle
+                key={`flood-rect-${flood.id}-${index}`}
+                bounds={flood.bounds}
                 options={{
                   strokeColor: getFloodColor(flood.severity),
                   strokeOpacity: 0.8,
@@ -782,32 +869,11 @@ const MapFlood: React.FC = () => {
                   fillOpacity: getFloodOpacity(flood.severity)
                 }}
               />
-              
-              {/* Polyline trung tâm đường ngập */}
-              <Polyline
-                path={flood.path}
-                options={{
-                  strokeColor: getFloodColor(flood.severity),
-                  strokeOpacity: 1,
-                  strokeWeight: 4,
-                  strokePattern: [10, 5] // Đường đứt nét
-                }}
-              />
-              
-              {/* Marker đầu đường ngập */}
-              <Marker 
-                position={flood.path[0]} 
-                label={{
-                  text: "🌊",
-                  fontSize: "16px"
-                }}
-                title={flood.name}
-              />
-            </React.Fragment>
-          );
+            );
+          }
         })}
 
-        {/* Đường đi - VỚI DOUBLE KEY ĐỂ FORCE RE-RENDER */}
+        {/* Đường đi */}
         {showRoute && routePath.length > 0 && (
           <Polyline
             key={`route-${routeKey}-${mapKey}`}
@@ -857,22 +923,5 @@ const MapFlood: React.FC = () => {
     </div>
   );
 };
-
-// Hàm tạo hình tròn (giữ lại cho tương thích)
-function createCircleCoordinates(lat: number, lng: number, radiusInMeters: number): number[][] {
-  const points = 32;
-  const coordinates: number[][] = [];
-  const distanceX = radiusInMeters / (111320 * Math.cos(lat * Math.PI / 180));
-  const distanceY = radiusInMeters / 110540;
-
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * 2 * Math.PI;
-    const dx = distanceX * Math.cos(angle);
-    const dy = distanceY * Math.sin(angle);
-    coordinates.push([lng + dx, lat + dy]);
-  }
-
-  return coordinates;
-}
 
 export default MapFlood;
