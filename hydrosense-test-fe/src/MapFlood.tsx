@@ -3,9 +3,6 @@ import { GoogleMap, useJsApiLoader, Circle, Polyline, Marker } from '@react-goog
 import axios from 'axios';
 import * as polyline from '@mapbox/polyline';
 
-// const CLOUD_RUN_URL = "http://localhost:8989";
-// const GOOGLE_MAPS_API_KEY = "AIzaSyDrmU7jKJByeSSF0ngpPelT3p4kte09I7Y"; 
-
 // read env
 const CLOUD_RUN_URL = import.meta.env.VITE_CLOUD_RUN_URL;
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
