@@ -1,0 +1,72 @@
+{
+  "cameras": {
+    "CAM_001": {
+      "cameraId": "CAM_001",
+      "flood": {
+        "isFlooded": true,
+        "status": "danger",
+        "waterLevelMm": 278
+      },
+      "location": {
+        "lat": 16.060217,
+        "lng": 108.212948
+      },
+      "roadName": "Nguyễn Văn Linh, Đà Nẵng",
+      "updatedAt": 1763806257444
+    },
+    "CAM_002": {
+      "cameraId": "CAM_002",
+      "flood": {
+        "isFlooded": true,
+        "status": "normal",
+        "waterLevelMm": 247
+      },
+      "location": {
+        "lat": 16.07132,
+        "lng": 108.220058
+      },
+      "roadName": "Lê Duẩn, Đà Nẵng",
+      "updatedAt": 1763806257444
+    },
+    "CAM_003": {
+      "cameraId": "CAM_003",
+      "flood": {
+        "isFlooded": true,
+        "waterLevelMm": 200
+      },
+      "location": {
+        "lat": 16.068364,
+        "lng": 108.223877
+      },
+      "roadName": "Trần Phú, Đà Nẵng",
+      "updatedAt": 1763813561480
+    },
+    "CAM_004": {
+      "cameraId": "CAM_004",
+      "flood": {
+        "isFlooded": true,
+        "waterLevelMm": 150
+      },
+      "location": {
+        "lat": 16.066961,
+        "lng": 108.20736
+      },
+      "roadName": "Lê Duẩn, Đà Nẵng",
+      "updatedAt": 1763813561480
+    },
+    "CAM_005": {
+      "cameraId": "CAM_005",
+      "flood": {
+        "isFlooded": true,
+        "status": "normal",
+        "waterLevelMm": 150
+      },
+      "location": {
+        "lat": 16.067919,
+        "lng": 108.217088
+      },
+      "roadName": "Hùng Vương, Đà Nẵng",
+      "updatedAt": 1763806257444
+    }
+  }
+}
