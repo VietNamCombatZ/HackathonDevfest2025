@@ -121,8 +121,8 @@ async function updateFloodData() {
   }
 }
 
-// Cấu hình thời gian cập nhật (mặc định 30 giây, có thể thay đổi)
-const UPDATE_INTERVAL_MS = 30000; // 30 giây
+// Cấu hình thời gian cập nhật (mặc định 10 giây, có thể thay đổi)
+const UPDATE_INTERVAL_MS = 10000; // 10 giây
 
 console.log("🚀 Script tự động cập nhật dữ liệu ngập lụt Đà Nẵng");
 console.log(`⏱️  Cập nhật mỗi ${UPDATE_INTERVAL_MS / 1000} giây`);
