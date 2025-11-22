@@ -1,0 +1,25 @@
+graphhopper:
+  datareader.file: vietnam.pbf
+  graph.location: graph-cache
+  import.osm.ignored_highways: footway,cycleway,path,pedestrian,steps
+  
+  profiles:
+    - name: car
+      custom_model:
+        speed:
+          - if: "true"
+            limit_to: 140
+  
+  profiles_ch: []  # ← FIX: Đổi thành empty array
+
+server:
+  application_connectors:
+  - type: http
+    port: 8989
+    bind_host: 0.0.0.0
+  request_log:
+      appenders: []
+  admin_connectors:
+  - type: http
+    port: 8990
+    bind_host: 0.0.0.0
