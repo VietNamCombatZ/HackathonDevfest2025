@@ -638,9 +638,9 @@ const MapFlood: React.FC = () => {
         setTimeout(() => setShowRoute(true), 100);
         
         if (routingMethod === "avoid_danger") {
-          alert(`✅ Đã tìm đường tránh ${blockedFloods.length} vùng ngập nguy hiểm!`);
+          console.log(`✅ Đã tìm đường tránh ${blockedFloods.length} vùng ngập nguy hiểm!`);
         } else {
-          alert("✅ Đã tìm đường!");
+          console.log("✅ Đã tìm đường!");
         }
       } else {
         alert("Không tìm thấy đường!");
@@ -834,7 +834,7 @@ const MapFlood: React.FC = () => {
             cursor: (isRouting || !startPoint) ? 'wait' : 'pointer'
           }}
         >
-          {isRouting ? "Đang tính..." : "🔥 TRÁNH NGẬP"}
+          {isRouting ? "Đang tính..." : "🔥 TÌM ĐƯỜNG"}
         </button>
 
         {showFirebaseFloodZones && firebaseCameraData.length > 0 && (
