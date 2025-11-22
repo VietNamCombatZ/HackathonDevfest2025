@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "seed:firebase": "node seed/seed-firebase.js",
+    "seed:auto-update": "node seed/auto-update-seed.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
