@@ -5,9 +5,9 @@ import time
 FIREBASE_URL = "https://hydros-72c7c-default-rtdb.asia-southeast1.firebasedatabase.app"
 
 # Cấu hình camera
-CAMERA_ID = "CAM_002"
-CAMERA_LAT = 16.073736
-CAMERA_LNG = 108.214791
+CAMERA_ID = "CAM_001"
+CAMERA_LAT = 16.074745
+CAMERA_LNG = 108.219738
 CAMERA_ROAD = "Quang Trung, Đà Nẵng"
 
 def determine_status(water_level_mm):
